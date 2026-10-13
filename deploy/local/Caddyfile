@@ -1,0 +1,16 @@
+# Local edge. Same shape as production (deploy/k8s/caddy/Caddyfile), but certificates come from Caddy's own
+# local CA instead of Let's Encrypt, so browsers will warn unless you trust it (caddy trust).
+{
+	local_certs
+	on_demand_tls {
+		# Certificates only for domains the control plane has verified.
+		ask http://api:3001/internal/caddy/ask
+	}
+}
+
+https:// {
+	tls {
+		on_demand
+	}
+	reverse_proxy gateway:8080
+}

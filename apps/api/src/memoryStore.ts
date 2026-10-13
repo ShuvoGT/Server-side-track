@@ -1,0 +1,98 @@
+import type { Container, Domain, Tenant, UsageCounts, UsageHour } from './model.js';
+import { DuplicateHostnameError, type ContainerPatch, type DomainPatch, type Store } from './store.js';
+
+function notFound(kind: string, id: string): Error {
+  return new Error(`${kind} ${id} not found`);
+}
+
+export class MemoryStore implements Store {
+  private tenants = new Map<string, Tenant>();
+  private containers = new Map<string, Container>();
+  private domains = new Map<string, Domain>();
+  private usage = new Map<string, UsageHour>();
+
+  async ping() {}
+
+  async createTenant(tenant: Tenant) {
+    this.tenants.set(tenant.id, tenant);
+    return tenant;
+  }
+  async getTenant(id: string) {
+    return this.tenants.get(id) ?? null;
+  }
+  async listTenants() {
+    return [...this.tenants.values()];
+  }
+
+  async createContainer(container: Container) {
+    this.containers.set(container.id, container);
+    return container;
+  }
+  async getContainer(id: string) {
+    return this.containers.get(id) ?? null;
+  }
+  async listContainers(tenantId?: string) {
+    return [...this.containers.values()].filter((c) => !tenantId || c.tenantId === tenantId);
+  }
+  async updateContainer(id: string, patch: ContainerPatch) {
+    const current = this.containers.get(id);
+    if (!current) throw notFound('Container', id);
+    const next = { ...current, ...patch, updatedAt: new Date() };
+    this.containers.set(id, next);
+    return next;
+  }
+  async deleteContainer(id: string) {
+    this.containers.delete(id);
+    for (const [key, domain] of this.domains) if (domain.containerId === id) this.domains.delete(key);
+    for (const [key, row] of this.usage) if (row.containerId === id) this.usage.delete(key);
+  }
+
+  async createDomain(domain: Domain) {
+    if (await this.getDomainByHostname(domain.hostname)) throw new DuplicateHostnameError(domain.hostname);
+    this.domains.set(domain.id, domain);
+    return domain;
+  }
+  async getDomain(id: string) {
+    return this.domains.get(id) ?? null;
+  }
+  async getDomainByHostname(hostname: string) {
+    return [...this.domains.values()].find((d) => d.hostname === hostname) ?? null;
+  }
+  async listDomains(containerId: string) {
+    return [...this.domains.values()].filter((d) => d.containerId === containerId);
+  }
+  async listVerifiedDomains() {
+    return [...this.domains.values()].filter((d) => d.status === 'verified');
+  }
+  async updateDomain(id: string, patch: DomainPatch) {
+    const current = this.domains.get(id);
+    if (!current) throw notFound('Domain', id);
+    const next = { ...current, ...patch };
+    this.domains.set(id, next);
+    return next;
+  }
+  async deleteDomain(id: string) {
+    this.domains.delete(id);
+  }
+
+  async addUsage(containerId: string, hour: Date, counts: Partial<UsageCounts>) {
+    const key = `${containerId}|${hour.toISOString()}`;
+    const row = this.usage.get(key) ?? {
+      containerId,
+      hour,
+      requests: 0,
+      loader: 0,
+      webhook: 0,
+      botFlagged: 0,
+      botDropped: 0,
+      errors: 0,
+    };
+    for (const [field, value] of Object.entries(counts) as [keyof UsageCounts, number][]) row[field] += value;
+    this.usage.set(key, row);
+  }
+  async listUsage(containerId: string, from: Date, to: Date) {
+    return [...this.usage.values()]
+      .filter((r) => r.containerId === containerId && r.hour >= from && r.hour < to)
+      .sort((a, b) => a.hour.getTime() - b.hour.getTime());
+  }
+}

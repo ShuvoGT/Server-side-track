@@ -1,0 +1,51 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "fake-tagging",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "deploy/dev/fake-tagging-server.mjs"
+      ],
+      "port": 18080
+    },
+    {
+      "name": "api",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "--env-file=deploy/dev/api.env",
+        "apps/api/dist/server.js"
+      ],
+      "port": 3000
+    },
+    {
+      "name": "gateway",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "--env-file=deploy/dev/gateway.env",
+        "apps/gateway/dist/server.js"
+      ],
+      "port": 8080
+    },
+    {
+      "name": "provisioner",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "--env-file=deploy/dev/provisioner.env",
+        "apps/provisioner/dist/server.js"
+      ],
+      "port": 9091
+    },
+    {
+      "name": "dashboard",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "pnpm@9.15.9",
+        "--dir",
+        "apps/dashboard",
+        "dev"
+      ],
+      "port": 3100
+    }
+  ]
+}

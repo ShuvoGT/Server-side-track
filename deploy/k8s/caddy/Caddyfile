@@ -1,0 +1,26 @@
+# Production edge (namespace platform-system). Caddy terminates TLS for every customer domain and forwards to
+# the gateway. Certificate storage must be a shared, backed-up volume (Longhorn), so that Caddy replicas act as a
+# cluster and a lost volume does not force every certificate to be issued again at once.
+#
+# Caddy is the first hop: it trusts no incoming X-Forwarded-For and sends the visitor's address to the gateway.
+# For that address to be the visitor's, the MetalLB Service in front of Caddy needs externalTrafficPolicy: Local.
+{
+	email {$ACME_EMAIL}
+	on_demand_tls {
+		# Certificates only for domains the control plane has verified.
+		ask http://api-internal.platform-system.svc.cluster.local:3001/internal/caddy/ask
+	}
+}
+
+https:// {
+	tls {
+		on_demand
+	}
+	reverse_proxy gateway.platform-system.svc.cluster.local:8080 {
+		# GTM preview requests can take longer than 20 seconds.
+		transport http {
+			response_header_timeout 60s
+		}
+		lb_try_duration 2s
+	}
+}

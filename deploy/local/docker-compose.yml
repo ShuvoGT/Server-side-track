@@ -1,0 +1,85 @@
+# Local stack: Redis, the control plane API (SQLite), the edge gateway, the dashboard, Caddy and the
+# provisioner. The provisioner starts Google's tagging and preview servers as Docker containers
+# (sst-<id>-tagging, sst-<id>-preview) for every container created in the dashboard.
+#
+#   cp .env.example .env               # then fill in the values
+#   docker compose up -d --build
+
+name: sst-local
+
+services:
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      retries: 10
+
+  api:
+    build: { context: ../.., args: { APP: api } }
+    environment:
+      # SQLite file on a volume; the API applies migrations itself at startup.
+      DATABASE_URL: file:/app/data/sst.db
+      REDIS_URL: redis://redis:6379
+      ADMIN_API_KEY: ${ADMIN_API_KEY}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
+      EDGE_HOSTNAME: ${EDGE_HOSTNAME}
+      EDGE_IPV4: ${EDGE_IPV4:-}
+      # Placeholder until the provisioner reports where each container's tagging server runs.
+      TAGGING_UPSTREAM_TEMPLATE: http://sst-{id}-tagging:8080
+    volumes: [apidata:/app/data]
+    ports: ['3000:3000']
+    depends_on:
+      redis: { condition: service_healthy }
+
+  gateway:
+    build: { context: ../.., args: { APP: gateway } }
+    environment:
+      API_INTERNAL_URL: http://api:3001
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
+      REDIS_URL: redis://redis:6379
+      GEOIP_DB_PATH: ${GEOIP_DB_PATH:-}
+    volumes: ['./geoip:/geoip:ro']
+    # Published for testing without TLS: curl -H 'Host: sst.example.test' http://localhost:8080/...
+    # The gateway trusts one proxy hop, so a test can set the visitor IP with -H 'X-Forwarded-For: ...'.
+    ports: ['8080:8080', '9090:9090']
+    depends_on:
+      redis: { condition: service_healthy }
+
+  dashboard:
+    build: { context: ../.., dockerfile: apps/dashboard/Dockerfile }
+    environment:
+      API_URL: http://api:3000
+      ADMIN_API_KEY: ${ADMIN_API_KEY}
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD}
+      SESSION_SECRET: ${SESSION_SECRET}
+    ports: ['3100:3100']
+    depends_on: [api]
+
+  caddy:
+    image: caddy:2.10-alpine
+    ports: ['80:80', '443:443']
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy:/data
+    depends_on: [gateway, api]
+
+  provisioner:
+    build: { context: ../.., args: { APP: provisioner } }
+    environment:
+      REDIS_URL: redis://redis:6379
+      API_INTERNAL_URL: http://api:3001
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
+      DRIVER: docker
+      # Tagging servers join this stack's network, so the gateway reaches them by name.
+      DOCKER_NETWORK: sst-local_default
+    # Controls the local Docker engine. Development only: in production the Kubernetes driver is used.
+    user: root
+    volumes: ['/var/run/docker.sock:/var/run/docker.sock']
+    depends_on:
+      redis: { condition: service_healthy }
+      api: { condition: service_started }
+
+volumes:
+  apidata:
+  caddy:

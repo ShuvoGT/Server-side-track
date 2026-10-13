@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.next/
+*.tsbuildinfo
+.env
+.env.local
+deploy/local/geoip/*.mmdb
+apps/api/data/*.db*
+.idea/
+deploy/dev/*.env

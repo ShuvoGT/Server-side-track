@@ -1,0 +1,41 @@
+# Permissions for the provisioner (namespace platform-system). It creates and deletes one ctr-<id> namespace per
+# customer container and the objects inside it, and nothing else.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: provisioner
+  namespace: platform-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: sst-provisioner
+rules:
+  - apiGroups: ['']
+    resources: [namespaces]
+    verbs: [get, create, patch, delete]
+  - apiGroups: ['']
+    resources: [secrets, services]
+    verbs: [get, create, patch, delete]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, create, patch, delete]
+  - apiGroups: [policy]
+    resources: [poddisruptionbudgets]
+    verbs: [get, create, patch, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [get, create, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: sst-provisioner
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: sst-provisioner
+subjects:
+  - kind: ServiceAccount
+    name: provisioner
+    namespace: platform-system

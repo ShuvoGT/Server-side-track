@@ -1,0 +1,89 @@
+// Control plane configuration. SQLite is the source of truth; Redis only caches routes for the gateway.
+// SQLite means one API instance writing the file: run a single replica with the file on a persistent volume.
+// Change this file only together with a migration: pnpm --filter @sst/api prisma:migrate --name <change>
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Tenant {
+  id         String      @id
+  name       String
+  createdAt  DateTime    @default(now())
+  containers Container[]
+}
+
+enum ContainerStatus {
+  pending
+  provisioning
+  active
+  failed
+  deleting
+}
+
+model Container {
+  id              String          @id
+  tenantId        String
+  tenant          Tenant          @relation(fields: [tenantId], references: [id])
+  name            String
+  /// GTM server container id, from the Container Config.
+  gtmContainerId  String
+  /// Base64 Container Config passed to the tagging servers as CONTAINER_CONFIG.
+  containerConfig String
+  /// Web container served by the custom loader (gtm.js).
+  webContainerId  String?
+  status          ContainerStatus @default(pending)
+  statusMessage   String?
+  upstreamUrl     String
+  loaderGtmPath   String
+  loaderGtagPath  String
+  webhookPath     String
+  webhookSecret   String
+  powerUps        Json
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  domains         Domain[]
+  usage           UsageHour[]
+
+  @@index([tenantId])
+}
+
+enum DomainStatus {
+  pending
+  verified
+  failed
+}
+
+model Domain {
+  id            String       @id
+  containerId   String
+  container     Container    @relation(fields: [containerId], references: [id], onDelete: Cascade)
+  hostname      String       @unique
+  status        DomainStatus @default(pending)
+  verifiedAt    DateTime?
+  lastCheckedAt DateTime?
+  lastError     String?
+  createdAt     DateTime     @default(now())
+
+  @@index([containerId])
+}
+
+/// Request counts per container and UTC hour, rolled up from the gateway's Redis counters.
+model UsageHour {
+  containerId String
+  container   Container @relation(fields: [containerId], references: [id], onDelete: Cascade)
+  hour        DateTime
+  requests    Int       @default(0)
+  loader      Int       @default(0)
+  webhook     Int       @default(0)
+  botFlagged  Int       @default(0)
+  botDropped  Int       @default(0)
+  errors      Int       @default(0)
+
+  @@id([containerId, hour])
+}

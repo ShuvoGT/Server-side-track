@@ -1,0 +1,25 @@
+{
+  "name": "@sst/provisioner",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b",
+    "dev": "tsx watch src/server.ts",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "@kubernetes/client-node": "1.1.3",
+    "@sst/shared": "workspace:*",
+    "bullmq": "5.81.5",
+    "dockerode": "4.0.12",
+    "fastify": "5.12.5",
+    "prom-client": "15.1.3",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/dockerode": "4.0.2"
+  }
+}

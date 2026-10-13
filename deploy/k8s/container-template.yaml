@@ -1,0 +1,141 @@
+# Kubernetes objects for one customer container. The provisioner creates these itself
+# (apps/provisioner/src/drivers/manifests.ts); this file is the readable reference, and can be applied by hand:
+#
+#   export CTR_ID=c123abc CONTAINER_CONFIG=... IMAGE=harbor.internal/gtm/gtm-cloud-image:2026-10-13
+#   envsubst < container-template.yaml | kubectl apply -f -
+#
+# Sizes follow the capacity plan: 2 tagging instances (0.25 vCPU / 384 MiB requested, 1 vCPU / 512 MiB limit)
+# and exactly one preview server, never autoscaled.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ctr-${CTR_ID}
+  labels:
+    sst.platform/container-id: ${CTR_ID}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: gtm-config
+  namespace: ctr-${CTR_ID}
+type: Opaque
+stringData:
+  CONTAINER_CONFIG: ${CONTAINER_CONFIG}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tagging
+  namespace: ctr-${CTR_ID}
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: tagging }
+  strategy:
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  template:
+    metadata:
+      labels: { app: tagging }
+    spec:
+      automountServiceAccountToken: false
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: { app: tagging }
+      containers:
+        - name: tagging
+          image: ${IMAGE}
+          ports: [{ name: http, containerPort: 8080 }]
+          env:
+            - name: CONTAINER_CONFIG
+              valueFrom: { secretKeyRef: { name: gtm-config, key: CONTAINER_CONFIG } }
+            - name: PREVIEW_SERVER_URL
+              value: http://preview.ctr-${CTR_ID}.svc.cluster.local:8080
+          resources:
+            requests: { cpu: 250m, memory: 384Mi }
+            limits: { cpu: '1', memory: 512Mi }
+          readinessProbe:
+            httpGet: { path: /healthy, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthy, port: http }
+            initialDelaySeconds: 15
+            periodSeconds: 10
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: tagging
+  namespace: ctr-${CTR_ID}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app: tagging }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tagging
+  namespace: ctr-${CTR_ID}
+spec:
+  selector: { app: tagging }
+  ports: [{ name: http, port: 8080, targetPort: http }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: preview
+  namespace: ctr-${CTR_ID}
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app: preview }
+  template:
+    metadata:
+      labels: { app: preview }
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: preview
+          image: ${IMAGE}
+          ports: [{ name: http, containerPort: 8080 }]
+          env:
+            - name: CONTAINER_CONFIG
+              valueFrom: { secretKeyRef: { name: gtm-config, key: CONTAINER_CONFIG } }
+            - name: RUN_AS_PREVIEW_SERVER
+              value: 'true'
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 512Mi }
+          livenessProbe:
+            httpGet: { path: /healthy, port: http }
+            initialDelaySeconds: 15
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: preview
+  namespace: ctr-${CTR_ID}
+spec:
+  selector: { app: preview }
+  ports: [{ name: http, port: 8080, targetPort: http }]
+---
+# Only the gateway (platform-system) and this namespace's own tagging servers may connect in.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ingress-from-gateway
+  namespace: ctr-${CTR_ID}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: platform-system }
+        - podSelector: {}
+      ports: [{ port: 8080 }]
