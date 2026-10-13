@@ -1,0 +1,98 @@
+# Single-server installation: everything on one Linux server with Docker, reachable from the internet.
+# This is the step before the guide's three-node k3s cluster; the same images and settings move over unchanged.
+#
+#   ./setup.sh edge.example.com tracking-admin.example.com admin@example.com
+#
+# Only Caddy publishes ports (80, 443). The API, gateway, dashboard and Redis are reachable inside this stack only.
+
+name: sst
+
+x-restart: &restart
+  restart: unless-stopped
+
+services:
+  redis:
+    <<: *restart
+    image: redis:7-alpine
+    # Append-only file: routes, counters and queued jobs survive a restart.
+    command: ['redis-server', '--appendonly', 'yes']
+    volumes: [redis:/data]
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      retries: 10
+
+  api:
+    <<: *restart
+    build: { context: ../.., args: { APP: api } }
+    environment:
+      DATABASE_URL: file:/app/data/sst.db
+      REDIS_URL: redis://redis:6379
+      ADMIN_API_KEY: ${ADMIN_API_KEY:?run setup.sh first}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?run setup.sh first}
+      EDGE_HOSTNAME: ${EDGE_HOSTNAME:?set EDGE_HOSTNAME}
+      EDGE_IPV4: ${EDGE_IPV4:-}
+      TAGGING_UPSTREAM_TEMPLATE: http://sst-{id}-tagging:8080
+    volumes: [apidata:/app/data]
+    depends_on:
+      redis: { condition: service_healthy }
+
+  gateway:
+    <<: *restart
+    build: { context: ../.., args: { APP: gateway } }
+    environment:
+      API_INTERNAL_URL: http://api:3001
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
+      REDIS_URL: redis://redis:6379
+      GEOIP_DB_PATH: ${GEOIP_DB_PATH:-}
+      # Caddy is the one proxy in front.
+      TRUSTED_PROXY_HOPS: '1'
+    volumes: ['./geoip:/geoip:ro']
+    depends_on:
+      redis: { condition: service_healthy }
+
+  dashboard:
+    <<: *restart
+    build: { context: ../.., dockerfile: apps/dashboard/Dockerfile }
+    environment:
+      API_URL: http://api:3000
+      ADMIN_API_KEY: ${ADMIN_API_KEY}
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:?run setup.sh first}
+      SESSION_SECRET: ${SESSION_SECRET:?run setup.sh first}
+    depends_on: [api]
+
+  provisioner:
+    <<: *restart
+    build: { context: ../.., args: { APP: provisioner } }
+    environment:
+      REDIS_URL: redis://redis:6379
+      API_INTERNAL_URL: http://api:3001
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
+      DRIVER: docker
+      DOCKER_NETWORK: sst_default
+      TAGGING_IMAGE: ${TAGGING_IMAGE:-gcr.io/cloud-tagging-10302018/gtm-cloud-image:stable}
+    # Starts Google's tagging servers as sibling containers on this server's Docker engine.
+    user: root
+    volumes: ['/var/run/docker.sock:/var/run/docker.sock']
+    depends_on:
+      redis: { condition: service_healthy }
+      api: { condition: service_started }
+
+  caddy:
+    <<: *restart
+    image: caddy:2.10-alpine
+    ports: ['80:80', '443:443', '443:443/udp']
+    environment:
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL}
+      EDGE_HOSTNAME: ${EDGE_HOSTNAME}
+      DASHBOARD_HOST: ${DASHBOARD_HOST:?set DASHBOARD_HOST}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificates. Back this volume up: losing it means issuing every certificate again at once.
+      - caddy:/data
+    depends_on: [gateway, api, dashboard]
+
+volumes:
+  redis:
+  apidata:
+  caddy:

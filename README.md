@@ -16,6 +16,8 @@ apps/dashboard/      dashboard (Next.js): onboarding, domains, power-ups, usage,
 packages/shared/     route schema, power-up logic, loader paths, webhook signing (shared by both apps)
 apps/provisioner/    provisioner (BullMQ worker): starts Google's tagging + preview servers per container
 deploy/local/        docker compose stack: Redis, API, gateway, dashboard, provisioner, Caddy
+deploy/server/       production on one internet-facing server: real certificates, setup.sh (see its README)
+deploy/openship/     compose file for Openship (core services behind its HTTPS edge; secrets as Openship env vars)
 deploy/dev/          example env files and a fake tagging server for running the services without Docker
 deploy/k8s/          per-container Kubernetes template, production Caddyfile
 Dockerfile           API and gateway images: --build-arg APP=api|gateway (dashboard: apps/dashboard/Dockerfile)

@@ -1,0 +1,38 @@
+# Edge for a single-server installation. Certificates come from Let's Encrypt (ZeroSSL as fallback), so ports 80
+# and 443 must be reachable from the internet and the DNS records must point at this server.
+{
+	email {$ACME_EMAIL}
+	on_demand_tls {
+		# Certificates for customer tracking domains only once the control plane has verified them.
+		ask http://api:3001/internal/caddy/ask
+	}
+}
+
+# Dashboard for the team.
+{$DASHBOARD_HOST} {
+	encode gzip
+	reverse_proxy dashboard:3100
+}
+
+# The edge host name customers CNAME to. Requests for it directly only get a health answer.
+{$EDGE_HOSTNAME} {
+	respond "ok" 200
+}
+
+# Plain HTTP only redirects (Caddy answers certificate challenges on port 80 before this).
+http:// {
+	redir https://{host}{uri} 308
+}
+
+# Customer tracking domains (sst.example.com), each with an on-demand certificate.
+https:// {
+	tls {
+		on_demand
+	}
+	reverse_proxy gateway:8080 {
+		# GTM preview requests can take longer than 20 seconds.
+		transport http {
+			response_header_timeout 60s
+		}
+	}
+}

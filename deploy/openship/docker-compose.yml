@@ -1,0 +1,60 @@
+# Openship deployment: the platform core behind Openship's own HTTPS edge (OpenResty on 80/443).
+# Openship routes the public URLs, so no service publishes host ports and there is no Caddy here.
+# Not included: the provisioner (needs the host's Docker socket) and on-demand certificates for customer
+# tracking domains; use deploy/server on a dedicated server for those.
+#
+# Secrets (ADMIN_API_KEY, INTERNAL_API_TOKEN, DASHBOARD_PASSWORD, SESSION_SECRET, EDGE_HOSTNAME) are set as
+# project environment variables in Openship, never in this file. They are deliberately not listed below: a
+# `${VAR}` entry here is saved by Openship as an empty service value that overrides the project variable.
+
+name: sst
+
+x-restart: &restart
+  restart: unless-stopped
+
+services:
+  redis:
+    <<: *restart
+    image: redis:7-alpine
+    command: ['redis-server', '--appendonly', 'yes']
+    volumes: [redis:/data]
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      retries: 10
+
+  api:
+    <<: *restart
+    build: { context: ../.., args: { APP: api } }
+    environment:
+      DATABASE_URL: file:/app/data/sst.db
+      REDIS_URL: redis://redis:6379
+      TAGGING_UPSTREAM_TEMPLATE: http://sst-{id}-tagging:8080
+    expose: ['3000']
+    volumes: [apidata:/app/data]
+    depends_on:
+      redis: { condition: service_healthy }
+
+  gateway:
+    <<: *restart
+    build: { context: ../.., args: { APP: gateway } }
+    environment:
+      API_INTERNAL_URL: http://api:3001
+      REDIS_URL: redis://redis:6379
+      # Openship's edge is the one proxy in front.
+      TRUSTED_PROXY_HOPS: '1'
+    expose: ['8080']
+    depends_on:
+      redis: { condition: service_healthy }
+
+  dashboard:
+    <<: *restart
+    build: { context: ../.., dockerfile: apps/dashboard/Dockerfile }
+    environment:
+      API_URL: http://api:3000
+    expose: ['3100']
+    depends_on: [api]
+
+volumes:
+  redis:
+  apidata:

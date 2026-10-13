@@ -104,6 +104,8 @@ code,
 pre {
   font-family: var(--mono);
   font-size: 12.5px;
+  /* Show code exactly as typed: fonts such as Cascadia Code would draw != as a single symbol. */
+  font-variant-ligatures: none;
 }
 
 :focus-visible {

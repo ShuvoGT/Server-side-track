@@ -8,3 +8,4 @@ deploy/local/geoip/*.mmdb
 apps/api/data/*.db*
 .idea/
 deploy/dev/*.env
+deploy/server/geoip/*.mmdb
