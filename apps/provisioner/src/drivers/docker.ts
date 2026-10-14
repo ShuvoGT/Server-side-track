@@ -1,5 +1,5 @@
 import Docker from 'dockerode';
-import { poll, PollAbort, type ContainerSpec, type Deployment, type Driver } from './types.js';
+import { poll, PollAbort, previewUrlFor, type ContainerSpec, type Deployment, type Driver } from './types.js';
 
 const LABEL = 'sst.platform/container-id';
 const OWN_NETWORK = 'sst-provisioned';
@@ -8,6 +8,8 @@ export interface DockerDriverOptions {
   image: string;
   /** Network shared with the gateway. Without it, the tagging port is published on 127.0.0.1. */
   network?: string;
+  /** Public https:// preview server address; {id} is the container id. Omitted: no GTM Preview. */
+  previewUrlTemplate?: string;
   docker?: Docker;
 }
 
@@ -125,10 +127,11 @@ export class DockerDriver implements Driver {
       false,
     );
     const publish = !this.options.network;
+    const previewUrl = previewUrlFor(this.options.previewUrlTemplate, spec.id);
     const tagging = await this.ensureContainer(
       n.tagging,
       spec.id,
-      [config, `PREVIEW_SERVER_URL=http://${n.preview}:8080`],
+      previewUrl ? [config, `PREVIEW_SERVER_URL=${previewUrl}`] : [config],
       publish,
     );
     // Nothing older is kept running in Docker, so whatever this apply started is removed again on failure.

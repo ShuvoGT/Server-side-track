@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ContainerRecord, ControlPlane, StatusReport } from '../src/controlPlane.js';
 import { explainCrash } from '../src/drivers/docker.js';
+import { ExternalDriver } from '../src/drivers/external.js';
 import { containerManifests, upstreamFor } from '../src/drivers/manifests.js';
 import { poll, PollAbort, type ContainerSpec, type Deployment, type Driver } from '../src/drivers/types.js';
 import { processJob, type Logger } from '../src/processor.js';
@@ -43,10 +44,20 @@ describe('containerManifests', () => {
       limits: { cpu: '1', memory: '512Mi' },
     });
     expect(c.readinessProbe.httpGet.path).toBe('/healthy');
-    expect(c.env).toContainEqual({
-      name: 'PREVIEW_SERVER_URL',
-      value: 'http://preview.ctr-cabc123.svc.cluster.local:8080',
-    });
+    // Google's image rejects an internal http:// preview URL, so none is set without a public template.
+    expect(c.env.map((e: { name: string }) => e.name)).toEqual(['CONTAINER_CONFIG']);
+    const withPreview = containerManifests(
+      { id: 'cabc123', containerConfig: 'x' },
+      {
+        image: 'img',
+        taggingReplicas: 2,
+        gatewayNamespace: 'platform-system',
+        previewUrlTemplate: 'https://preview-{id}.example.com',
+      },
+    ) as any[];
+    const env = withPreview.find((o) => o.metadata.name === 'tagging' && o.kind === 'Deployment').spec
+      .template.spec.containers[0].env;
+    expect(env).toContainEqual({ name: 'PREVIEW_SERVER_URL', value: 'https://preview-cabc123.example.com' });
     expect(tagging.spec.template.spec.topologySpreadConstraints).toHaveLength(1);
   });
 
@@ -217,5 +228,17 @@ describe('explainCrash', () => {
     expect(explainCrash(['a', 'b', 'something odd'].join('\n'))).toBe(
       'Last log lines: a | b | something odd',
     );
+  });
+});
+
+describe('ExternalDriver', () => {
+  it('points at the templated upstream, never removes anything, and fails when nothing answers', async () => {
+    const driver = new ExternalDriver('http://127.0.0.1:1/{id}');
+    const deployment = await driver.apply({ id: 'c9', containerConfig: 'x' });
+    expect(deployment).toEqual({ upstreamUrl: 'http://127.0.0.1:1/c9', removeOnFailure: false });
+    await expect(driver.waitReady({ id: 'c9', containerConfig: 'x' }, deployment, 50)).rejects.toThrow(
+      'add its service to the deployment',
+    );
+    await expect(driver.remove()).resolves.toBeUndefined();
   });
 });

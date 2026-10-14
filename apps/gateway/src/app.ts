@@ -38,7 +38,18 @@ export interface GatewayOptions {
   trustedProxyHops: number;
   upstreamTimeoutMs: number;
   bodyLimitBytes: number;
+  /**
+   * Where gtag.js is fetched from when the tagging server refuses to serve it (400/404), so it is still served
+   * first-party from the tracking domain. Default https://www.googletagmanager.com.
+   */
+  googleScriptOrigin?: string;
 }
+
+const UNCACHEABLE_SCRIPT_PARAMS = ['gtm_auth', 'gtm_preview', 'gtm_debug'];
+const GOOGLE_SCRIPT_TIMEOUT_MS = 10_000;
+
+/** gtag.js requests, whether through the custom loader's gtag path or Google's standard /gtag/js path. */
+const isGtagScript = (pathAndQuery: string) => pathAndQuery.startsWith('/gtag/js');
 
 export interface GatewayDeps {
   resolver: RouteResolver;
@@ -208,6 +219,41 @@ export function buildGateway(options: GatewayOptions, deps: GatewayDeps): Fastif
     }
   }
 
+  /**
+   * Fetches a Google script straight from Google, server-side. Used when the tagging server refuses gtag.js:
+   * the browser still gets it from the tracking domain, so ad blockers that match googletagmanager.com
+   * do not stop it. The file is passed through unchanged.
+   */
+  async function fetchGoogleScript(pathAndQuery: string, headers: HeaderMap): Promise<UpstreamResult> {
+    const end = deps.metrics.upstreamSeconds.startTimer({ kind: 'google_script' });
+    try {
+      const response = await undiciRequest(
+        new URL(pathAndQuery, options.googleScriptOrigin ?? 'https://www.googletagmanager.com'),
+        {
+          method: 'GET',
+          headers: {
+            'user-agent': headers['user-agent'] ?? 'Mozilla/5.0',
+            accept: '*/*',
+            'accept-encoding': headers['accept-encoding'] ?? 'identity',
+            ...(headers['accept-language'] && { 'accept-language': headers['accept-language'] }),
+          },
+          headersTimeout: GOOGLE_SCRIPT_TIMEOUT_MS,
+          bodyTimeout: GOOGLE_SCRIPT_TIMEOUT_MS,
+          dispatcher: deps.dispatcher,
+        },
+      );
+      const body = Buffer.from(await response.body.arrayBuffer());
+      const out: Record<string, string | string[]> = {};
+      for (const [name, value] of Object.entries(response.headers)) {
+        if (value !== undefined && !DROPPED_RESPONSE_HEADERS.has(name)) out[name] = value;
+      }
+      out['x-sst-script-source'] = 'google';
+      return { status: response.statusCode, headers: out, setCookies: [], body };
+    } finally {
+      end();
+    }
+  }
+
   function send(reply: FastifyReply, result: UpstreamResult, extraCookies: string[] = []): FastifyReply {
     const cookies = [...result.setCookies, ...extraCookies];
     reply.code(result.status).headers(result.headers);
@@ -235,8 +281,22 @@ export function buildGateway(options: GatewayOptions, deps: GatewayDeps): Fastif
     const headers = baseHeaders(req, host, req.ip);
     headers['accept-encoding'] = encoding;
     delete headers.cookie; // Scripts are the same for everyone; cookies would only fragment the cache.
-    const result = await callUpstream(route, req.method, upstreamPath, headers, undefined, 'loader');
+    let result = await callUpstream(route, req.method, upstreamPath, headers, undefined, 'loader');
     count(req, 'loader_miss');
+    if (isGtagScript(upstreamPath) && (result.status === 400 || result.status === 404)) {
+      // The tagging server's clients did not claim gtag.js; serve Google's own file from this domain instead.
+      try {
+        const fallback = await fetchGoogleScript(upstreamPath, headers);
+        if (fallback.status === 200) {
+          result = fallback;
+          count(req, 'gtag_fallback');
+        } else {
+          req.log.warn({ status: fallback.status, path: upstreamPath }, 'gtag.js fallback answered non-200');
+        }
+      } catch (err) {
+        req.log.warn({ err, path: upstreamPath }, 'gtag.js fallback failed');
+      }
+    }
     if (cacheable && result.status === 200 && result.setCookies.length === 0 && req.method === 'GET') {
       const keptHeaders: Record<string, string> = {};
       for (const name of CACHED_LOADER_HEADERS) {
@@ -384,6 +444,11 @@ export function buildGateway(options: GatewayOptions, deps: GatewayDeps): Fastif
           const loader = rewriteLoaderRequest(route, url.pathname, url.searchParams);
           if (loader)
             return await handleLoader(req, reply, route, host, loader.upstreamPath, loader.cacheable);
+          // Google tags configured with server_container_url load gtag.js from /gtag/js on the tracking domain.
+          if (url.pathname === '/gtag/js') {
+            const cacheable = !UNCACHEABLE_SCRIPT_PARAMS.some((name) => url.searchParams.has(name));
+            return await handleLoader(req, reply, route, host, `${url.pathname}${url.search}`, cacheable);
+          }
         }
         if (route.webhook && url.pathname === route.webhook.path) {
           return await handleWebhook(req, reply, route, host);

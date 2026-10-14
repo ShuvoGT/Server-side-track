@@ -20,7 +20,8 @@ deploy/server/       production on one internet-facing server: real certificates
 deploy/openship/     compose file for Openship (core services behind its HTTPS edge; secrets as Openship env vars)
 deploy/dev/          example env files and a fake tagging server for running the services without Docker
 deploy/k8s/          per-container Kubernetes template, production Caddyfile
-Dockerfile           API and gateway images: --build-arg APP=api|gateway (dashboard: apps/dashboard/Dockerfile)
+Dockerfile           API, gateway and provisioner images: --build-arg APP=api|gateway|provisioner
+                     (dashboard: apps/dashboard/Dockerfile)
 ```
 
 ## How a request flows
@@ -41,10 +42,14 @@ The gateway, for each request to a customer's tracking host (e.g. `sst.shop.com`
 2. **Custom loader**: a random path such as `/k3x9q2mf7a.js` is rewritten to `/gtm.js?id=<web container>` (or
    `/gtag/js?id=G-…` for the gtag path), fetched from the tagging server's Web Container client and cached for 60 s.
    Preview builds (`gtm_auth`, `gtm_preview`, `gtm_debug`) are never cached.
-3. **Webhook** (`POST /sst/woocommerce`): checks `x-sst-timestamp` and `x-sst-signature`
+3. **gtag.js** (`/gtag/js?id=G-…`, which Google tags with `server_container_url` load from the tracking domain):
+   served by the tagging server like the loader. If the tagging server refuses it (400/404, e.g. no client claims
+   it), the gateway fetches the same file from `www.googletagmanager.com` server-side and serves it unchanged from
+   the tracking domain (`x-sst-script-source: google`), so it stays first-party. Google's cookies are not passed on.
+4. **Webhook** (`POST /sst/woocommerce`): checks `x-sst-timestamp` and `x-sst-signature`
    (HMAC-SHA256 of `"<timestamp>.<body>"` with the container's secret, 5 minute tolerance) and forwards with
    `x-sst-webhook-verified: <container id>`.
-4. Everything else is a tracking request. Power-ups run, then the request goes to the tagging server with the
+5. Everything else is a tracking request. Power-ups run, then the request goes to the tagging server with the
    original `Host`, the visitor's IP in `X-Forwarded-For` and the enrichment headers below.
 
 Request headers added for the server container (read them with _Request Header_ variables in GTM). Incoming
@@ -61,6 +66,7 @@ Request headers added for the server container (read them with _Request Header_ 
 
 | Power-up        | Default | Behaviour                                                                                                                                                                                                                                                                                                                                                                                         |
 | --------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `customLoader`  | on      | Serves gtm.js (for the container's web container id) and gtag.js from the tracking domain under random paths. Off: those paths are not served, so the website must use Google's standard snippet. The dashboard can generate new paths if a blocker list learns them.                                                                                                                             |
 | `geoHeaders`    | on      | MaxMind GeoLite2 City lookup. Off automatically if `GEOIP_DB_PATH` is not set.                                                                                                                                                                                                                                                                                                                    |
 | `userAgentInfo` | on      | bowser (MIT). ua-parser-js 2.x is avoided because of its AGPL licence.                                                                                                                                                                                                                                                                                                                            |
 | `botDetection`  | `flag`  | `off`, `flag` (headers only) or `drop` (answers 204, nothing forwarded). isbot patterns, empty user agents, a platform-wide IP list (`BOT_IP_LIST_PATH`) and per-container `blockedIps` (addresses or CIDRs).                                                                                                                                                                                     |
@@ -92,10 +98,15 @@ container is created, gets a new Container Config, is restarted from the dashboa
 
 Drivers (`DRIVER`):
 
-| Driver       | Where               | What it creates                                                                                                         |
-| ------------ | ------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `kubernetes` | production (k3s)    | namespace `ctr-<id>` with secret, deployments, services, PDB, NetworkPolicy; RBAC in `deploy/k8s/provisioner-rbac.yaml` |
-| `docker`     | docker compose, dev | containers `sst-<id>-tagging` and `sst-<id>-preview` on the local Docker engine                                         |
+| Driver       | Where                  | What it creates                                                                                                         |
+| ------------ | ---------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `kubernetes` | production (k3s)       | namespace `ctr-<id>` with secret, deployments, services, PDB, NetworkPolicy; RBAC in `deploy/k8s/provisioner-rbac.yaml` |
+| `docker`     | docker compose, dev    | containers `sst-<id>-tagging` and `sst-<id>-preview` on the local Docker engine                                         |
+| `external`   | Openship, shared hosts | nothing: the tagging servers are services of the deployment; only checks `/healthy` and reports Active or Failed        |
+
+`PREVIEW_URL_TEMPLATE` (e.g. `https://preview-{id}.example.com`) gives tagging servers the public HTTPS address of
+their preview server. Google's image exits on an internal `http://` preview URL, so without it GTM Preview is off
+and live tracking still works.
 
 The Container Config is entered in the dashboard (New container, or Settings to replace it). It never goes in
 `.env`.
@@ -196,6 +207,54 @@ The gateway serves `/healthz`, `/readyz` and `/metrics` on its admin port (9090)
 | Integrations (GTM playbook, WooCommerce plugin, vendors) | Not started. The gateway's webhook endpoint and signing scheme are ready for the plugin.                                                                                                                                                                                                                |
 | Security, privacy, testing, operations, rollout          | Chapters are stubs in the guide. Already in place: namespace NetworkPolicy, timing-safe token checks, verified-only certificates, consent-aware cookie keeper, IP anonymization, CI (lint, build, test, image build).                                                                                   |
 
-Things to verify against a real GTM container before the pilot: whether `PREVIEW_SERVER_URL` works with the
-in-cluster preview URL or must be a public URL, and that the Web Container client in the server container is set
-to serve the web container id used by the custom loader.
+## Live deployment: Openship
+
+The platform runs on Openship (`deploy.ibos.io`), server **ibos-34** (`103.197.205.34`), project
+`server-side-tracking`, from `deploy/openship/docker-compose.yml`. ibos-34 is shared with other teams' apps, so
+nothing gets the host's Docker socket: the provisioner runs with `DRIVER=external`, and each website's Google
+tagging and preview servers are services of the project.
+
+| Public name                   | Openship routes to               | Purpose                                                      |
+| ----------------------------- | -------------------------------- | ------------------------------------------------------------ |
+| `sst.ibos.agency`             | `dashboard:3100`                 | Dashboard; also the CNAME target (edge) for tracking domains |
+| `ss.travilo.io`               | `gateway:8080`                   | Tracking domain of travilo.io                                |
+| `travilo-preview.ibos.agency` | `sst-chukjbhcigtx2-preview:8080` | GTM server Preview for travilo.io                            |
+
+Secrets (`ADMIN_API_KEY`, `INTERNAL_API_TOKEN`, `DASHBOARD_PASSWORD`, `SESSION_SECRET`) and `EDGE_HOSTNAME` /
+`EDGE_IPV4` are Openship project variables; each tagging service's `CONTAINER_CONFIG` is a service variable. None
+are in the repository. Deploys are folder uploads with the compose file at the archive root (build contexts
+rewritten from `../..` to `.`); redeploy only the services that changed, never `redis`.
+
+### Adding a website
+
+1. Dashboard: **New container** with the GTM server container's Container Config; note the container id.
+2. Compose: add `sst-<id>-tagging` and `sst-<id>-preview` (copy the Travilo pair), deploy, and set
+   `CONTAINER_CONFIG` on both as a service variable.
+3. Cloudflare (DNS only, grey cloud): `ss.<site>` CNAME `sst.ibos.agency`, and `<site>-preview.ibos.agency`
+   CNAME `sst.ibos.agency`.
+4. Openship: custom domain `ss.<site>` on `gateway` (8080), `<site>-preview.ibos.agency` on the preview service
+   (8080); set `PREVIEW_SERVER_URL=https://<site>-preview.ibos.agency` on the tagging service.
+5. Dashboard: add and verify the domain, set the web container id in Power-ups.
+6. GTM server container: Web Container client allows the web container id (with "Automatically serve all
+   dependent Google scripts"), GA4 client, GA4 tag; publish. Web container: `server_container_url` on the Google
+   tag; publish.
+7. Website: replace the GTM snippet with the dashboard's, remove every other Google tag on the page (plugins such
+   as Site Kit or GTM4WP), purge every cache, and check in a browser that `/g/collect` goes to `ss.<site>`.
+
+### Lessons from the first website (travilo.io)
+
+- **Google's image refuses an internal preview URL.** `PREVIEW_SERVER_URL` must be public HTTPS; see above.
+- **The office DNS (dns01, `10.209.99.2`) hosts its own `ibos.agency` and `travilo.io` zones**, so ibos-34 and
+  office PCs get "not found" for names that exist only in Cloudflare. Until IT adds them to dns01 (or forwards
+  those zones), the Travilo tagging service has a mounted `/etc/hosts` line for `travilo-preview.ibos.agency`
+  (Openship service file). Remove it once dns01 knows the name. Chrome's Secure DNS hides this on office PCs.
+- **The server container refused `gtag.js`** for the GA4 tag with a 400 even with the client settings above;
+  the gateway's gtag.js fallback covers it (dashboard log: "Loader (gtag.js via Google)").
+- **A second Google tag on the page wins.** Site Kit placed `GT-55JPMHN4` without `server_container_url`, and GA4
+  hits went straight to Google until it was removed.
+- **Page caches serve old snippets.** LiteSpeed kept the old homepage after the plugins changed; AirLift serves
+  its own optimized copy. Purge all of them after every change, and exclude the tracking domain from "delay JS".
+- **Test as a visitor.** Logged-in WordPress admins get a different page (and Site Kit's own `G-EQDN3BWDSD`
+  telemetry), which confuses Tag Assistant; use an incognito window.
+- An occasional `502 Tagging server error` on `/gtm/get_memo` is a slow GTM Preview poll (over the gateway's 30 s
+  limit), not lost data. A 502 on `/g/collect` or a loader path is a real outage.

@@ -51,6 +51,7 @@ async function main() {
       trustedProxyHops: config.TRUSTED_PROXY_HOPS,
       upstreamTimeoutMs: config.UPSTREAM_TIMEOUT_MS,
       bodyLimitBytes: config.BODY_LIMIT_BYTES,
+      googleScriptOrigin: config.GOOGLE_SCRIPT_ORIGIN,
     },
     {
       resolver,

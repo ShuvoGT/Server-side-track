@@ -51,8 +51,10 @@ spec:
           env:
             - name: CONTAINER_CONFIG
               valueFrom: { secretKeyRef: { name: gtm-config, key: CONTAINER_CONFIG } }
-            - name: PREVIEW_SERVER_URL
-              value: http://preview.ctr-${CTR_ID}.svc.cluster.local:8080
+            # GTM Preview needs a public https:// address for the preview server (Google's image rejects an
+            # internal http:// one). Add once the preview server has its own domain:
+            # - name: PREVIEW_SERVER_URL
+            #   value: https://preview-${CTR_ID}.example.com
           resources:
             requests: { cpu: 250m, memory: 384Mi }
             limits: { cpu: '1', memory: 512Mi }

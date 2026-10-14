@@ -24,6 +24,8 @@ const configSchema = z.object({
   LOADER_CACHE_TTL_MS: z.coerce.number().int().min(0).default(60_000),
   COUNTER_FLUSH_MS: z.coerce.number().int().min(1_000).default(10_000),
   BODY_LIMIT_BYTES: z.coerce.number().int().default(1_048_576),
+  /** Where gtag.js comes from when the tagging server refuses to serve it. */
+  GOOGLE_SCRIPT_ORIGIN: z.url().default('https://www.googletagmanager.com'),
 });
 
 export type GatewayConfig = z.infer<typeof configSchema>;

@@ -5,6 +5,14 @@ export interface ContainerSpec {
   containerConfig: string;
 }
 
+/**
+ * PREVIEW_SERVER_URL for a container, or null. Google's tagging server only accepts a public https:// address
+ * (an internal http://preview:8080 makes it exit with "Invalid preview server URL").
+ */
+export function previewUrlFor(template: string | undefined, id: string): string | null {
+  return template ? template.replaceAll('{id}', id) : null;
+}
+
 export interface Deployment {
   /** Where the gateway reaches the tagging servers. */
   upstreamUrl: string;

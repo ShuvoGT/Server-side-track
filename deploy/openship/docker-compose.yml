@@ -1,11 +1,22 @@
-# Openship deployment: the platform core behind Openship's own HTTPS edge (OpenResty on 80/443).
+# Openship deployment: the platform behind Openship's own HTTPS edge (OpenResty on 80/443).
 # Openship routes the public URLs, so no service publishes host ports and there is no Caddy here.
-# Not included: the provisioner (needs the host's Docker socket) and on-demand certificates for customer
-# tracking domains; use deploy/server on a dedicated server for those.
 #
-# Secrets (ADMIN_API_KEY, INTERNAL_API_TOKEN, DASHBOARD_PASSWORD, SESSION_SECRET, EDGE_HOSTNAME) are set as
-# project environment variables in Openship, never in this file. They are deliberately not listed below: a
-# `${VAR}` entry here is saved by Openship as an empty service value that overrides the project variable.
+# ibos-34 is a shared server, so nothing here gets the host's Docker socket. Instead:
+# - Each platform container's Google tagging and preview servers are services of this project, named
+#   sst-<container id>-tagging / sst-<container id>-preview (the gateway reaches them by that name).
+#   Adding a website container therefore means adding its two services here and redeploying.
+# - The provisioner runs with DRIVER=external: it starts nothing, it checks each tagging server's /healthy and
+#   reports the container Active or Failed in the dashboard.
+# - Each tracking domain (e.g. ss.travilo.io) is a custom domain on the gateway service in Openship, which issues
+#   its certificate. On a dedicated server, deploy/server does all of this automatically.
+#
+# Secrets (ADMIN_API_KEY, INTERNAL_API_TOKEN, DASHBOARD_PASSWORD, SESSION_SECRET, EDGE_HOSTNAME) are project
+# environment variables in Openship, and each tagging service's CONTAINER_CONFIG is a service variable; none are
+# in this file. They are deliberately not listed below: a `${VAR}` entry here is saved by Openship as an empty
+# service value that overrides the project variable.
+#
+# The upload puts this file at the archive root, with every build context rewritten from ../.. to "."
+# (Openship's scan only detects a compose file at the root).
 
 name: sst
 
@@ -54,6 +65,35 @@ services:
       API_URL: http://api:3000
     expose: ['3100']
     depends_on: [api]
+
+  provisioner:
+    <<: *restart
+    build: { context: ../.., args: { APP: provisioner } }
+    environment:
+      REDIS_URL: redis://redis:6379
+      API_INTERNAL_URL: http://api:3001
+      DRIVER: external
+      EXTERNAL_UPSTREAM_TEMPLATE: http://sst-{id}-tagging:8080
+    depends_on:
+      redis: { condition: service_healthy }
+      api: { condition: service_started }
+
+  # Travilo-production (container chukjbhcigtx2, GTM-TSC24Z44).
+  sst-chukjbhcigtx2-tagging:
+    <<: *restart
+    image: gcr.io/cloud-tagging-10302018/gtm-cloud-image:stable
+    environment:
+      # Google's image only accepts a public https:// preview address: the preview service below has the
+      # Openship custom domain travilo-preview.ibos.agency (port 8080; Cloudflare CNAME to sst.ibos.agency).
+      PREVIEW_SERVER_URL: https://travilo-preview.ibos.agency
+    expose: ['8080']
+
+  sst-chukjbhcigtx2-preview:
+    <<: *restart
+    image: gcr.io/cloud-tagging-10302018/gtm-cloud-image:stable
+    environment:
+      RUN_AS_PREVIEW_SERVER: 'true'
+    expose: ['8080']
 
 volumes:
   redis:

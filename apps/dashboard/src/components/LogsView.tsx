@@ -11,6 +11,7 @@ const OUTCOME_LABEL: Record<string, string> = {
   proxied: 'Forwarded',
   loader_hit: 'Loader (cached)',
   loader_miss: 'Loader',
+  gtag_fallback: 'Loader (gtag.js via Google)',
   webhook: 'Webhook',
   webhook_rejected: 'Bad signature',
   bot_dropped: 'Bot dropped',

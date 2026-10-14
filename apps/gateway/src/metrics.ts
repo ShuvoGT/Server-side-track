@@ -4,6 +4,7 @@ export type Outcome =
   | 'proxied'
   | 'loader_hit'
   | 'loader_miss'
+  | 'gtag_fallback'
   | 'webhook'
   | 'webhook_rejected'
   | 'bot_dropped'

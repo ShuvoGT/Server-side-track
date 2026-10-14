@@ -30,6 +30,10 @@ let upstream: Server;
 let upstreamUrl: string;
 let seen: Seen[] = [];
 let gtmHits = 0;
+// Stands in for www.googletagmanager.com in the gtag.js fallback.
+let google: Server;
+let googleUrl: string;
+let googleSeen: string[] = [];
 
 beforeAll(async () => {
   upstream = createServer((req, res) => {
@@ -50,6 +54,15 @@ beforeAll(async () => {
         });
         return res.end(`/* gtm ${req.url} */`);
       }
+      if (req.url!.startsWith('/gtag/js')) {
+        // The tagging server serves gtag.js only for G-SERVED; it refuses other ids, as a misconfigured client would.
+        if (req.url!.includes('id=G-SERVED')) {
+          res.writeHead(200, { 'content-type': 'application/javascript' });
+          return res.end('/* gtag from tagging server */');
+        }
+        res.writeHead(400);
+        return res.end();
+      }
       if (req.url!.startsWith('/g/collect')) {
         res.writeHead(204, { 'set-cookie': ['FPID=abc; Path=/; HttpOnly', '_fbp=fresh; Path=/'] });
         return res.end();
@@ -60,13 +73,29 @@ beforeAll(async () => {
   });
   await new Promise<void>((resolve) => upstream.listen(0, '127.0.0.1', resolve));
   upstreamUrl = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
+
+  google = createServer((req, res) => {
+    googleSeen.push(req.url!);
+    if (req.url!.includes('id=G-UNKNOWN')) {
+      res.writeHead(404);
+      return res.end();
+    }
+    res.writeHead(200, { 'content-type': 'application/javascript; charset=UTF-8', 'set-cookie': 'NID=x' });
+    res.end(`/* gtag from google ${req.url} */`);
+  });
+  await new Promise<void>((resolve) => google.listen(0, '127.0.0.1', resolve));
+  googleUrl = `http://127.0.0.1:${(google.address() as AddressInfo).port}`;
 });
 
-afterAll(() => new Promise<void>((resolve) => upstream.close(() => resolve())));
+afterAll(async () => {
+  await new Promise<void>((resolve) => upstream.close(() => resolve()));
+  await new Promise<void>((resolve) => google.close(() => resolve()));
+});
 
 beforeEach(() => {
   seen = [];
   gtmHits = 0;
+  googleSeen = [];
 });
 
 function makeRoute(powerUps: PowerUpsInput = {}, overrides: Partial<ContainerRoute> = {}): ContainerRoute {
@@ -91,7 +120,13 @@ function setup(route: ContainerRoute | null, sourceOverride?: RouteSource) {
   const metrics = createMetrics(false);
   const requestLog = new RequestLogBuffer();
   const app = buildGateway(
-    { logLevel: 'silent', trustedProxyHops: 1, upstreamTimeoutMs: 30_000, bodyLimitBytes: 1_048_576 },
+    {
+      logLevel: 'silent',
+      trustedProxyHops: 1,
+      upstreamTimeoutMs: 30_000,
+      bodyLimitBytes: 1_048_576,
+      googleScriptOrigin: googleUrl,
+    },
     {
       resolver: new RouteResolver([source], { ttlMs: 30_000, negativeTtlMs: 5_000 }),
       counters,
@@ -314,5 +349,52 @@ describe('request log', () => {
   it('extracts GA4 event names', () => {
     expect(ga4EventNames(new URLSearchParams('v=2'), undefined)).toBeNull();
     expect(ga4EventNames(new URLSearchParams('en=a'), Buffer.from('en=b\nen=a'))).toBe('a, b');
+  });
+});
+
+describe('gtag.js', () => {
+  const signed = '/gtag/js?id=G-REFUSED&cx=c&gtm=4e6ac1&sign=abc_20261014';
+
+  it('serves gtag.js from the tagging server when it answers', async () => {
+    const { app } = setup(makeRoute());
+    const res = await app.inject({ url: '/gtag/js?id=G-SERVED', headers: visitor });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toBe('/* gtag from tagging server */');
+    expect(googleSeen).toEqual([]);
+  });
+
+  it('falls back to Google, unchanged, when the tagging server refuses it, and caches the result', async () => {
+    const { app, requestLog } = setup(makeRoute());
+    const res = await app.inject({ url: signed, headers: visitor });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toBe(`/* gtag from google ${signed} */`);
+    expect(res.headers['x-sst-script-source']).toBe('google');
+    expect(res.headers['set-cookie']).toBeUndefined();
+    expect(googleSeen).toEqual([signed]);
+
+    const again = await app.inject({ url: signed, headers: visitor });
+    expect(again.headers['x-sst-cache']).toBe('HIT');
+    expect(googleSeen).toHaveLength(1);
+
+    await new Promise((r) => setTimeout(r, 10));
+    const entries = (requestLog as unknown as { pending: { entry: Record<string, unknown> }[] }).pending;
+    expect(entries.map((e) => e.entry.outcome)).toEqual(['gtag_fallback', 'loader_hit']);
+  });
+
+  it('also covers the custom loader gtag path, and passes on the 400 when Google has no such script', async () => {
+    const { app } = setup(makeRoute());
+    const viaLoader = await app.inject({ url: '/xyz789uvw0.js?id=G-REFUSED', headers: visitor });
+    expect(viaLoader.statusCode).toBe(200);
+    expect(googleSeen).toEqual(['/gtag/js?id=G-REFUSED']);
+
+    const unknown = await app.inject({ url: '/gtag/js?id=G-UNKNOWN', headers: visitor });
+    expect(unknown.statusCode).toBe(400);
+  });
+
+  it('never caches preview builds', async () => {
+    const { app } = setup(makeRoute());
+    await app.inject({ url: '/gtag/js?id=G-REFUSED&gtm_debug=x', headers: visitor });
+    await app.inject({ url: '/gtag/js?id=G-REFUSED&gtm_debug=x', headers: visitor });
+    expect(googleSeen).toHaveLength(2);
   });
 });

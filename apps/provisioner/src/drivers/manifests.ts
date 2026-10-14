@@ -1,11 +1,13 @@
 import type { KubernetesObject } from '@kubernetes/client-node';
-import type { ContainerSpec } from './types.js';
+import { previewUrlFor, type ContainerSpec } from './types.js';
 
 export interface ManifestOptions {
   image: string;
   taggingReplicas: number;
   /** Namespace the gateway runs in; the only one allowed to reach the tagging servers. */
   gatewayNamespace: string;
+  /** Public https:// preview server address; {id} is the container id. Omitted: no GTM Preview. */
+  previewUrlTemplate?: string;
 }
 
 export const namespaceFor = (id: string) => `ctr-${id}`;
@@ -55,9 +57,10 @@ export function containerManifests(spec: ContainerSpec, options: ManifestOptions
       spec: { selector: { app: name }, ports: [{ name: 'http', port: 8080, targetPort: 'http' }] },
     }) as KubernetesObject;
 
+  const previewUrl = previewUrlFor(options.previewUrlTemplate, spec.id);
   const taggingTemplate = pod(
     'tagging',
-    [configEnv, { name: 'PREVIEW_SERVER_URL', value: `http://preview.${namespace}.svc.cluster.local:8080` }],
+    previewUrl ? [configEnv, { name: 'PREVIEW_SERVER_URL', value: previewUrl }] : [configEnv],
     { requests: { cpu: '250m', memory: '384Mi' }, limits: { cpu: '1', memory: '512Mi' } },
     { readinessProbe: probe(0, 5), livenessProbe: probe(15, 10) },
   );

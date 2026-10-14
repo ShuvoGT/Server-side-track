@@ -13,12 +13,21 @@ const configSchema = z.object({
   /**
    * kubernetes: one ctr-<id> namespace per container (production, k3s).
    * docker: one tagging and one preview container on the local Docker engine (development).
+   * external: the tagging servers are run by the deployment platform (e.g. Openship compose services); only
+   * health is checked and reported.
    */
-  DRIVER: z.enum(['kubernetes', 'docker']).default('kubernetes'),
+  DRIVER: z.enum(['kubernetes', 'docker', 'external']).default('kubernetes'),
+  /** external: where each container's tagging server is reached. {id} is the container id. */
+  EXTERNAL_UPSTREAM_TEMPLATE: z.string().default('http://sst-{id}-tagging:8080'),
   /** Google's tagging server image; in production the Harbor mirror with a dated tag. */
   TAGGING_IMAGE: z.string().default('gcr.io/cloud-tagging-10302018/gtm-cloud-image:stable'),
   /** How long a new or changed container may take to become healthy before it is marked failed. */
   READY_TIMEOUT_MS: z.coerce.number().int().min(10_000).default(300_000),
+  /**
+   * Public HTTPS address of each container's preview server, e.g. https://preview-{id}.example.com. Google's image
+   * refuses an internal http:// URL, so without this the tagging servers run without GTM Preview support.
+   */
+  PREVIEW_URL_TEMPLATE: optionalString,
   /** Kubernetes: the namespace the gateway runs in; the only one allowed to reach tagging servers. */
   GATEWAY_NAMESPACE: z.string().default('platform-system'),
   /** Kubernetes: tagging server replicas per container (the guide's minimum is 2). */

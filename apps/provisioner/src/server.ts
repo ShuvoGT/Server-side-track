@@ -5,6 +5,7 @@ import { RedisKeys, type ProvisioningJob } from '@sst/shared';
 import { loadConfig } from './config.js';
 import { HttpControlPlane } from './controlPlane.js';
 import { DockerDriver } from './drivers/docker.js';
+import { ExternalDriver } from './drivers/external.js';
 import { KubernetesDriver } from './drivers/kubernetes.js';
 import type { Driver } from './drivers/types.js';
 import { processJob } from './processor.js';
@@ -15,13 +16,20 @@ async function main() {
   const log = app.log;
 
   const driver: Driver =
-    config.DRIVER === 'docker'
-      ? new DockerDriver({ image: config.TAGGING_IMAGE, network: config.DOCKER_NETWORK })
-      : new KubernetesDriver({
-          image: config.TAGGING_IMAGE,
-          taggingReplicas: config.TAGGING_REPLICAS,
-          gatewayNamespace: config.GATEWAY_NAMESPACE,
-        });
+    config.DRIVER === 'external'
+      ? new ExternalDriver(config.EXTERNAL_UPSTREAM_TEMPLATE)
+      : config.DRIVER === 'docker'
+        ? new DockerDriver({
+            image: config.TAGGING_IMAGE,
+            network: config.DOCKER_NETWORK,
+            previewUrlTemplate: config.PREVIEW_URL_TEMPLATE,
+          })
+        : new KubernetesDriver({
+            image: config.TAGGING_IMAGE,
+            taggingReplicas: config.TAGGING_REPLICAS,
+            gatewayNamespace: config.GATEWAY_NAMESPACE,
+            previewUrlTemplate: config.PREVIEW_URL_TEMPLATE,
+          });
   const controlPlane = new HttpControlPlane(config.API_INTERNAL_URL, config.INTERNAL_API_TOKEN);
 
   const registry = new Registry();
