@@ -40,6 +40,8 @@ const liveData: LiveData = {
       { id: '1-0', time: '2026-10-13T09:00:00Z', path: '/abc.js' },
     ]
       .filter((e) => !query.before || e.id < query.before)
+      .filter((e) => !query.from || new Date(e.time) >= query.from)
+      .filter((e) => !query.to || new Date(e.time) <= query.to)
       .slice(0, query.limit) as never,
   pendingUsage: async () => [{ hour: new Date('2026-10-13T09:00:00Z'), counts: { requests: 4, errors: 1 } }],
 };
@@ -336,6 +338,17 @@ describe('snippet, webhook secret, usage and provisioner status', () => {
     const next = await t.call('GET', `/v1/containers/${c.id}/logs?before=2-0`);
     expect(next.body.entries.map((e: { id: string }) => e.id)).toEqual(['1-0']);
     expect((await t.call('GET', `/v1/containers/${c.id}/logs?before=bad`)).status).toBe(400);
+  });
+
+  it('filters request logs by a time window', async () => {
+    const c = await createContainer();
+    const logs = (q: string) => t.call('GET', `/v1/containers/${c.id}/logs?${q}`);
+    const ids = (res: { body: { entries: { id: string }[] } }) => res.body.entries.map((e) => e.id);
+    expect(ids(await logs('from=2026-10-13T09:00:30Z'))).toEqual(['2-0']);
+    expect(ids(await logs('to=2026-10-13T09:00:30Z'))).toEqual(['1-0']);
+    expect(ids(await logs('from=2026-10-13T09:00:00Z&to=2026-10-13T09:01:00Z'))).toEqual(['2-0', '1-0']);
+    expect((await logs('from=2026-10-13T10:00:00Z&to=2026-10-13T09:00:00Z')).status).toBe(400);
+    expect((await logs('from=yesterday')).status).toBe(400);
   });
 
   it('lets the provisioner report status and resync routes', async () => {

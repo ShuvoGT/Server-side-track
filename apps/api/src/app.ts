@@ -105,13 +105,20 @@ const patchContainerBody = z.object({
 });
 const createDomainBody = z.object({ hostname: z.string() });
 const usageQuery = z.object({ from: z.iso.datetime().optional(), to: z.iso.datetime().optional() });
-const logsQuery = z.object({
-  limit: z.coerce.number().int().min(1).max(500).default(100),
-  before: z
-    .string()
-    .regex(/^\d+-\d+$/)
-    .optional(),
-});
+const logsQuery = z
+  .object({
+    limit: z.coerce.number().int().min(1).max(500).default(100),
+    before: z
+      .string()
+      .regex(/^\d+-\d+$/)
+      .optional(),
+    /** Only requests received in this window (inclusive). */
+    from: z.iso.datetime().optional(),
+    to: z.iso.datetime().optional(),
+  })
+  .refine((q) => !q.from || !q.to || Date.parse(q.from) <= Date.parse(q.to), {
+    message: 'from must not be after to',
+  });
 const statusBody = z.object({
   status: z.enum(['provisioning', 'active', 'failed']),
   message: z.string().max(2000).nullable().optional(),
@@ -351,8 +358,12 @@ export function buildApi(deps: ApiDeps): { app: FastifyInstance; internal: Fasti
 
       v1.get<{ Params: { id: string } }>('/containers/:id/logs', async (req) => {
         const container = await getContainerOr404(req.params.id);
-        const query = logsQuery.parse(req.query);
-        const entries = await liveData.recentLogs(container.id, query);
+        const { from, to, ...query } = logsQuery.parse(req.query);
+        const entries = await liveData.recentLogs(container.id, {
+          ...query,
+          from: from ? new Date(from) : undefined,
+          to: to ? new Date(to) : undefined,
+        });
         return { available: liveData !== noLiveData, entries };
       });
 

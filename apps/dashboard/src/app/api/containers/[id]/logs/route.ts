@@ -8,10 +8,17 @@ export const dynamic = 'force-dynamic';
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   if (!(await hasSession())) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   const { id } = await params;
-  const before = request.nextUrl.searchParams.get('before') ?? undefined;
-  const limit = Math.min(Number(request.nextUrl.searchParams.get('limit')) || 100, 500);
+  const search = request.nextUrl.searchParams;
+  const limit = Math.min(Number(search.get('limit')) || 100, 500);
   try {
-    return NextResponse.json(await api.logs(id, limit, before));
+    return NextResponse.json(
+      await api.logs(id, {
+        limit,
+        before: search.get('before') ?? undefined,
+        from: search.get('from') ?? undefined,
+        to: search.get('to') ?? undefined,
+      }),
+    );
   } catch (error) {
     if (error instanceof ApiError)
       return NextResponse.json({ error: error.message }, { status: error.status });

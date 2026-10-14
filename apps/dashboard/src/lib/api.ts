@@ -113,11 +113,14 @@ export const api = {
       'GET',
       `/v1/containers/${encodeURIComponent(id)}/usage?from=${from.toISOString()}&to=${to.toISOString()}`,
     ),
-  logs: (id: string, limit: number, before?: string) =>
-    call<LogsResponse>(
-      'GET',
-      `/v1/containers/${encodeURIComponent(id)}/logs?limit=${limit}${before ? `&before=${encodeURIComponent(before)}` : ''}`,
-    ),
+  logs: (id: string, query: { limit: number; before?: string; from?: string; to?: string }) => {
+    const params = new URLSearchParams({ limit: String(query.limit) });
+    for (const key of ['before', 'from', 'to'] as const) {
+      const value = query[key];
+      if (value) params.set(key, value);
+    }
+    return call<LogsResponse>('GET', `/v1/containers/${encodeURIComponent(id)}/logs?${params}`);
+  },
 
   addDomain: (containerId: string, hostname: string) =>
     call<Domain & { dns: { recommended: DnsRecord; alternative: DnsRecord[] } }>(

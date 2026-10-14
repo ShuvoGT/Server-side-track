@@ -220,6 +220,9 @@ export interface LogQuery {
   limit: number;
   /** Stream id; returns entries older than this one (for paging). */
   before?: string;
+  /** Only entries received in this window, inclusive. */
+  from?: Date;
+  to?: Date;
 }
 
 export interface LiveData {
@@ -232,8 +235,11 @@ export class RedisLiveData implements LiveData {
   constructor(private readonly redis: Redis) {}
 
   async recentLogs(containerId: string, query: LogQuery): Promise<RequestLogEntry[]> {
-    const start = query.before ? `(${query.before}` : '+';
-    const rows = await this.redis.xrevrange(RedisKeys.logs(containerId), start, '-', 'COUNT', query.limit);
+    // Stream ids start with the time in ms, so a time window is an id range. A bare "<ms>" means "<ms>-0" as the
+    // lower bound and "<ms>-<max>" as the upper one, which makes both ends inclusive.
+    const start = query.before ? `(${query.before}` : query.to ? String(query.to.getTime()) : '+';
+    const end = query.from ? String(query.from.getTime()) : '-';
+    const rows = await this.redis.xrevrange(RedisKeys.logs(containerId), start, end, 'COUNT', query.limit);
     const entries: RequestLogEntry[] = [];
     for (const [id, fields] of rows) {
       const raw = fields[fields.indexOf('e') + 1];
