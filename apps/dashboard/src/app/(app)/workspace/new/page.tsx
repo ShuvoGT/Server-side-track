@@ -4,7 +4,7 @@ export const metadata = { title: 'New workspace' };
 
 export default function NewWorkspacePage() {
   return (
-    <div style={{ maxWidth: 560 }}>
+    <div style={{ maxWidth: 560, margin: '0 auto' }}>
       <div className="page-head">
         <div>
           <h1>New workspace</h1>

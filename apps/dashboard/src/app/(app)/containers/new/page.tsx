@@ -7,7 +7,7 @@ export const metadata = { title: 'New container' };
 export default async function NewContainerPage() {
   const workspace = await currentWorkspace();
   return (
-    <div style={{ maxWidth: 720 }}>
+    <div style={{ maxWidth: 720, margin: '0 auto' }}>
       <div className="crumbs">
         <Link href="/">Containers</Link> / New
       </div>
