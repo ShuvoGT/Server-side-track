@@ -4,16 +4,18 @@ A server-side tracking platform: managed hosting for Google's server-side Tag Ma
 _Server-Side Tracking Platform: Development Guide_ (v0.2, October 2026,
 `Server-Side Tracking Platform_ Development Guide.docx`).
 
-This repository holds the **data plane MVP plus the dashboard**: the edge gateway, the control plane API, the
-Next.js dashboard, and the deployment files for running them locally and on k3s. Google's tagging server image is
-used unchanged; everything here runs in front of it or around it.
+This repository holds the **data plane MVP plus a multi-user dashboard**: the edge gateway, the control plane API,
+the provisioner, the Next.js dashboard (accounts with email/password and Google, workspaces, approvals, two-step
+verification), and the deployment files for running them locally, on one server, on Openship and on k3s. Google's
+tagging server image is used unchanged; everything here runs in front of it or around it.
 
 ```
 apps/gateway/        edge gateway (Fastify + undici): routing, custom loader, power-ups, webhooks, counters
-apps/api/            control plane API (Fastify + Prisma + PostgreSQL): tenants, containers, domains, Caddy ask,
-                     usage, request logs
-apps/dashboard/      dashboard (Next.js): onboarding, domains, power-ups, usage, logs, settings
-packages/shared/     route schema, power-up logic, loader paths, webhook signing (shared by both apps)
+apps/api/            control plane API (Fastify + Prisma + PostgreSQL): accounts, workspaces, containers, domains,
+                     Caddy ask, usage, request logs, email (password reset, invites, approvals)
+apps/dashboard/      dashboard (Next.js): sign-in/sign-up, workspaces and members, containers, domains, power-ups,
+                     usage, logs, account settings, super-admin pages
+packages/shared/     route schema, power-up logic, loader paths, webhook signing, phone formats (shared)
 apps/provisioner/    provisioner (BullMQ worker): starts Google's tagging + preview servers per container
 deploy/local/        docker compose stack: Redis, API, gateway, dashboard, provisioner, Caddy
 deploy/server/       production on one internet-facing server: real certificates, setup.sh (see its README)
@@ -80,7 +82,8 @@ Requirements: Node.js 22+ (24 recommended), pnpm 9 (`npx pnpm@9.15.9` works with
 ```bash
 pnpm install
 pnpm build          # also runs prisma generate and next build
-pnpm test           # 50 tests: shared logic, gateway against a fake tagging server, API with the memory store
+pnpm test           # 96 tests: shared logic, gateway against a fake tagging server, API with the memory store,
+                    # accounts, approvals and two-step verification (RFC 6238 test vectors)
 pnpm lint && pnpm format:check
 ```
 
@@ -131,6 +134,14 @@ workspaces (other workspaces' containers answer 404). Requests with the admin ke
   access.
 - `SUPER_ADMIN_EMAILS` (API, comma-separated) see every workspace. On their first Google sign-in they become
   owners of workspaces that have no members, such as those created before accounts existed.
+- **Approval.** New accounts start as _pending_ (`REQUIRE_APPROVAL=true`, the default): they can sign in but only
+  see a "Waiting for approval" page, and the API refuses everything except `GET /v1/me`. Every super-admin gets an
+  email with the name, email, phone number and sign-in method; the dashboard shows the request under **Members**
+  (Account requests) and **All users**, with a count in the sidebar. **Approve** emails the user and gives them a
+  workspace; **Reject** keeps them out (they can be approved later). Super-admins, people invited by a workspace
+  owner, and accounts that existed before approvals were added are approved automatically.
+- **Sign-up** asks for name, email, phone number (country code + number) and password. Google sign-ups have no
+  phone number until the user adds one in Settings.
 - Passwords are scrypt hashes; ten failed sign-ins for an address or client block it for 15 minutes.
 - **Settings** (profile, preferences, security): name and phone; currency and time zone (every date in the
   dashboard uses it); password change, which signs out every other device; and two-step verification with an
@@ -142,7 +153,18 @@ workspaces (other workspaces' containers answer 404). Requests with the admin ke
   `smtps://user:password@smtp.example.com:465`), `MAIL_FROM` and `DASHBOARD_URL` on the API; without them the
   form says reset is not set up. The form answers the same for unknown addresses.
 - Google OAuth client: Google Cloud Console › APIs & Services › Credentials › OAuth client ID (Web application),
-  redirect URI `<DASHBOARD_URL>/api/auth/google/callback`.
+  redirect URI `<DASHBOARD_URL>/api/auth/google/callback`. Google never shares the user's Google password with
+  the platform: a Google account signs in with "Continue with Google", or sets a platform password in Settings.
+- **Emails** (all through `SMTP_URL`): password reset links, workspace invites, "new account waiting for approval"
+  to super-admins, and "your account is approved" to the user. A failed email is logged and never blocks the action.
+- **Deleting.** Workspace owners delete a workspace under Members once it has no containers (and not their only
+  one); members and pending invites go with it. Super-admins delete accounts under All users: workspaces shared with
+  another owner stay, an empty workspace of their own goes with them, and it is refused while a workspace of theirs
+  still has containers or other members without another owner. Super-admins and your own account cannot be deleted.
+
+Dashboard pages: **Containers**, **New container**, **Members** (invites, roles, account requests, delete
+workspace), **Settings** (profile, preferences, security), and for super-admins **All users**. The sidebar has a
+workspace switcher and a light/dark/system theme switch (light by default).
 
 ### Database: PostgreSQL
 
@@ -192,24 +214,41 @@ curl localhost:3000/v1/containers/<id>/snippet -H "$A"          # GTM snippet wi
 curl -i 'localhost:8080/g/collect?v=2&en=page_view' -H 'Host: sst.localtest.me' -H 'User-Agent: Mozilla/5.0 Chrome/141'
 ```
 
-### API reference (MVP)
+### API reference
 
-Public port (3000), `Authorization: Bearer $ADMIN_API_KEY`:
+Public port (3000), `Authorization: Bearer $ADMIN_API_KEY`. The dashboard adds `x-sst-user` (and
+`x-sst-session-issued-at`) for the signed-in user; the API then limits every request to that user's workspaces.
+Without them the admin key has full access.
 
-| Method           | Path                                   | Purpose                                                                     |
-| ---------------- | -------------------------------------- | --------------------------------------------------------------------------- |
-| GET/POST         | `/v1/tenants`                          | List or create tenants                                                      |
-| GET/POST         | `/v1/containers`                       | List (`?tenantId=`) or create from a Container Config; queues provisioning  |
-| GET/PATCH/DELETE | `/v1/containers/:id`                   | Read; change name, `webContainerId`, power-ups (partial, merged); delete    |
-| POST             | `/v1/containers/:id/webhook-secret`    | Rotate the WooCommerce webhook secret                                       |
-| GET              | `/v1/containers/:id/snippet`           | GTM head snippet, server container URL, gtag URL, webhook URL               |
-| GET              | `/v1/containers/:id/usage?from&to`     | Hourly request counts, including the current hour (default: last 7 days)    |
-| GET              | `/v1/containers/:id/logs?limit&before` | Request log, newest first (7 days; no IPs or query strings)                 |
-| GET              | `/v1/platform`                         | Edge host name and addresses, for DNS instructions                          |
-| GET/POST         | `/v1/containers/:id/domains`           | List or add a tracking domain (returns the DNS record to create)            |
-| POST             | `/v1/domains/:id/verify`               | Check DNS; on success the route goes live and Caddy may issue a certificate |
-| DELETE           | `/v1/domains/:id`                      | Remove a domain and its route                                               |
-| GET              | `/healthz`, `/readyz`, `/metrics`      | Probes and Prometheus                                                       |
+| Method           | Path                                           | Purpose                                                                     |
+| ---------------- | ---------------------------------------------- | --------------------------------------------------------------------------- |
+| POST             | `/v1/auth/signup`, `/v1/auth/signin`           | Email/password sign-up (with phone) and sign-in; ten failures block 15 min  |
+| POST             | `/v1/auth/google`                              | Sign in with a Google identity the dashboard verified                       |
+| POST             | `/v1/auth/two-factor`                          | Second step: authenticator or recovery code                                 |
+| POST             | `/v1/auth/password-reset[/confirm]`            | Email a reset link; set the new password                                    |
+| GET/PATCH        | `/v1/me`                                       | Signed-in user and workspaces; update profile and preferences               |
+| POST             | `/v1/me/password`                              | Change (or first set) the password; ends other sessions                     |
+| POST             | `/v1/me/two-factor/{setup,enable,disable}`     | Two-step verification                                                       |
+| GET              | `/v1/admin/users`                              | Super-admins: every account with status and workspaces                      |
+| POST/DELETE      | `/v1/admin/users/:id[/approve\|/reject]`       | Super-admins: approve, reject or delete an account                          |
+| GET/POST         | `/v1/tenants`                                  | List or create workspaces                                                   |
+| PATCH/DELETE     | `/v1/tenants/:id`                              | Rename; delete an empty workspace (owners)                                  |
+| GET/POST         | `/v1/tenants/:id/members`                      | Members and invites; add or invite by email (owners)                        |
+| PATCH/DELETE     | `/v1/tenants/:id/members/:userId`              | Change role; remove (owners) or leave                                       |
+| DELETE           | `/v1/tenants/:id/invites/:inviteId`            | Cancel an invite                                                            |
+| GET/POST         | `/v1/containers`                               | List (`?tenantId=`) or create from a Container Config; queues provisioning  |
+| GET/PATCH/DELETE | `/v1/containers/:id`                           | Read; change name, `webContainerId`, power-ups (partial, merged); delete    |
+| POST             | `/v1/containers/:id/provision`                 | Restart the tagging servers                                                 |
+| POST             | `/v1/containers/:id/loader-paths`              | New random custom loader paths                                              |
+| POST             | `/v1/containers/:id/webhook-secret`            | Rotate the WooCommerce webhook secret                                       |
+| GET              | `/v1/containers/:id/snippet`                   | GTM head snippet, server container URL, gtag URL, webhook URL               |
+| GET              | `/v1/containers/:id/usage?from&to`             | Hourly request counts, including the current hour (default: last 7 days)    |
+| GET              | `/v1/containers/:id/logs?limit&before&from&to` | Request log, newest first (7 days; no IPs or query strings)                 |
+| GET              | `/v1/platform`                                 | Edge host name and addresses, for DNS instructions                          |
+| GET/POST         | `/v1/containers/:id/domains`                   | List or add a tracking domain (returns the DNS record to create)            |
+| POST             | `/v1/domains/:id/verify`                       | Check DNS; on success the route goes live and Caddy may issue a certificate |
+| DELETE           | `/v1/domains/:id`                              | Remove a domain and its route                                               |
+| GET              | `/healthz`, `/readyz`, `/metrics`              | Probes and Prometheus                                                       |
 
 Internal port (3001), cluster only:
 
@@ -223,26 +262,48 @@ Internal port (3001), cluster only:
 
 The gateway serves `/healthz`, `/readyz` and `/metrics` on its admin port (9090), never on the visitor port.
 
+### Configuration
+
+API (`apps/api`):
+
+| Variable                                 | Purpose                                                                     |
+| ---------------------------------------- | --------------------------------------------------------------------------- |
+| `DATABASE_URL`                           | PostgreSQL connection string                                                |
+| `REDIS_URL`                              | Routes, counters, request logs, provisioning queue                          |
+| `ADMIN_API_KEY`, `INTERNAL_API_TOKEN`    | Public API key (dashboard) and internal token (gateway, provisioner)        |
+| `EDGE_HOSTNAME`, `EDGE_IPV4`             | CNAME target and A-record addresses customers point tracking domains at     |
+| `TAGGING_UPSTREAM_TEMPLATE`              | Where the gateway reaches a container's tagging server (`{id}` is replaced) |
+| `SUPER_ADMIN_EMAILS`                     | Comma-separated super-admin addresses (rights after a Google sign-in)       |
+| `REQUIRE_APPROVAL`                       | `true` (default): new accounts wait for a super-admin                       |
+| `SMTP_URL`, `MAIL_FROM`, `DASHBOARD_URL` | Email for resets, invites and approvals; links point at the dashboard       |
+| `SECRETS_KEY`                            | Encrypts two-step verification keys (default: derived from `ADMIN_API_KEY`) |
+| `SQLITE_IMPORT_FILE`                     | One-time import of an earlier SQLite database                               |
+
+Dashboard (`apps/dashboard`): `API_URL`, `ADMIN_API_KEY`, `SESSION_SECRET` (signs session cookies),
+`DASHBOARD_URL`, and optionally `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` for Google sign-in.
+
 ## Implementation status against the guide
 
-| Guide chapter                                            | Status                                                                                                                                                                                                                                                                                                  |
-| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Foundations, Architecture                                | Followed: data plane / control plane split, gateway keeps working without the API, PostgreSQL + Redis, Caddy on-demand TLS with an ask endpoint, per-container namespaces, health/metrics endpoints, zod-validated config, Prisma migrations.                                                           |
-| Data plane: tagging runtime                              | Done: the provisioner runs Google's image per container. Kubernetes: `ctr-<id>` namespace, 2 tagging replicas at 0.25/1 vCPU, one preview server, `/healthy` probes, PDB, NetworkPolicy (`deploy/k8s/container-template.yaml` documents the same objects). Docker: one tagging + one preview container. |
-| Data plane: edge gateway and custom loader               | Done (`apps/gateway`).                                                                                                                                                                                                                                                                                  |
-| Data plane: custom domains and SSL                       | Subdomain + CNAME/A verification + on-demand certificates done. Same-origin path setup (Nginx/Cloudflare snippets) not yet written.                                                                                                                                                                     |
-| Data plane: power-ups v1                                 | Geo, user agent, bot filtering, cookie keeper, anonymizer done.                                                                                                                                                                                                                                         |
-| Control plane: data model and API                        | MVP done (`apps/api`), admin key auth only.                                                                                                                                                                                                                                                             |
-| Control plane: provisioning                              | Done (`apps/provisioner`): validate, deploy, wait for health, report Active with the upstream URL; roll back a new container that fails; delete. Changing the Container Config in the dashboard re-provisions. Custom-domain certificate checks are not part of it yet.                                 |
-| Control plane: dashboard                                 | Done (`apps/dashboard`): sign-in, containers, onboarding, domains with DNS steps, power-ups, usage chart, live request logs, settings; empty, loading and error states. Accounts with email/password and Google, workspaces with owners and members, super-admins.                                      |
-| Logging, monitoring, metering                            | Prometheus metrics, hourly usage roll-up and 7-day request logs done; Loki and alerts not done.                                                                                                                                                                                                         |
-| Integrations (GTM playbook, WooCommerce plugin, vendors) | Not started. The gateway's webhook endpoint and signing scheme are ready for the plugin.                                                                                                                                                                                                                |
-| Security, privacy, testing, operations, rollout          | Chapters are stubs in the guide. Already in place: namespace NetworkPolicy, timing-safe token checks, verified-only certificates, consent-aware cookie keeper, IP anonymization, CI (lint, build, test, image build).                                                                                   |
+| Guide chapter                                            | Status                                                                                                                                                                                                                                                                                                                                                      |
+| -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Foundations, Architecture                                | Followed: data plane / control plane split, gateway keeps working without the API, PostgreSQL + Redis, Caddy on-demand TLS with an ask endpoint, per-container namespaces, health/metrics endpoints, zod-validated config, Prisma migrations.                                                                                                               |
+| Data plane: tagging runtime                              | Done: the provisioner runs Google's image per container. Kubernetes: `ctr-<id>` namespace, 2 tagging replicas at 0.25/1 vCPU, one preview server, `/healthy` probes, PDB, NetworkPolicy (`deploy/k8s/container-template.yaml` documents the same objects). Docker: one tagging + one preview container.                                                     |
+| Data plane: edge gateway and custom loader               | Done (`apps/gateway`).                                                                                                                                                                                                                                                                                                                                      |
+| Data plane: custom domains and SSL                       | Subdomain + CNAME/A verification + on-demand certificates done. Same-origin path setup (Nginx/Cloudflare snippets) not yet written.                                                                                                                                                                                                                         |
+| Data plane: power-ups v1                                 | Geo, user agent, bot filtering, cookie keeper, anonymizer done.                                                                                                                                                                                                                                                                                             |
+| Control plane: data model and API                        | Done (`apps/api`): accounts, workspaces with owners and members, invites, approvals, containers, domains; every user request scoped to its workspaces.                                                                                                                                                                                                      |
+| Control plane: provisioning                              | Done (`apps/provisioner`): validate, deploy, wait for health, report Active with the upstream URL; roll back a new container that fails; delete. Changing the Container Config in the dashboard re-provisions. Custom-domain certificate checks are not part of it yet.                                                                                     |
+| Control plane: dashboard                                 | Done (`apps/dashboard`): sign-in, containers, onboarding, domains with DNS steps, power-ups, usage chart, live request logs, settings; empty, loading and error states. Accounts with email/password and Google, two-step verification, approvals, workspaces with owners and members, account settings (time zone used everywhere), super-admin user list. |
+| Logging, monitoring, metering                            | Prometheus metrics, hourly usage roll-up and 7-day request logs done; Loki and alerts not done.                                                                                                                                                                                                                                                             |
+| Integrations (GTM playbook, WooCommerce plugin, vendors) | Not started. The gateway's webhook endpoint and signing scheme are ready for the plugin.                                                                                                                                                                                                                                                                    |
+| Security, privacy, testing, operations, rollout          | Chapters are stubs in the guide. Already in place: namespace NetworkPolicy, timing-safe token checks, verified-only certificates, consent-aware cookie keeper, IP anonymization, scrypt passwords, sign-in limits, TOTP two-step verification with encrypted keys, session revocation on password change, CI (lint, build, test, image build).              |
 
 ## Live deployment: Openship
 
-The platform runs on Openship (`deploy.ibos.io`), server **ibos-34** (`103.197.205.34`), project
-`server-side-tracking`, from `deploy/openship/docker-compose.yml`. ibos-34 is shared with other teams' apps, so
+OpenTrack runs on Openship (`deploy.ibos.io`), server **ibos-34** (`103.197.205.34`), project
+`server-side-tracking`, from `deploy/openship/docker-compose.yml`, with the dashboard at https://sst.ibos.agency.
+Email goes through Google Workspace SMTP (an App Password); Google sign-in uses an OAuth client whose redirect URI
+is `https://sst.ibos.agency/api/auth/google/callback`. ibos-34 is shared with other teams' apps, so
 nothing gets the host's Docker socket: the provisioner runs with `DRIVER=external`, and each website's Google
 tagging and preview servers are services of the project.
 
@@ -256,7 +317,9 @@ tagging and preview servers are services of the project.
 Secrets (`ADMIN_API_KEY`, `INTERNAL_API_TOKEN`, `SESSION_SECRET`, `GOOGLE_CLIENT_ID`/`_SECRET`, `SUPER_ADMIN_EMAILS`, `SMTP_URL`, `MAIL_FROM`, `SECRETS_KEY`, `POSTGRES_PASSWORD`,
 `DATABASE_URL`) and `EDGE_HOSTNAME` / `EDGE_IPV4` are Openship project variables; each tagging service's `CONTAINER_CONFIG` is a service variable. None
 are in the repository. Deploys are folder uploads with the compose file at the archive root (build contexts
-rewritten from `../..` to `.`); redeploy only the services that changed, never `redis` or `postgres`.
+rewritten from `../..` to `.`); redeploy only the services that changed (usually `api` and `dashboard`), never
+`redis` or `postgres`. A dashboard tab opened before a deploy shows "The dashboard was updated" on its next action;
+reloading fixes it.
 
 ### Adding a website
 
