@@ -1560,3 +1560,12 @@ pre {
   color: var(--critical);
   text-align: right;
 }
+.label-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.label-row label {
+  font-weight: 550;
+}

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { ContainerRoute } from '@sst/shared';
 import { buildApi, resyncRoutes } from '../src/app.js';
+import type { MailMessage } from '../src/mailer.js';
 import { MemoryStore } from '../src/memoryStore.js';
 import {
   checkDomainDns,
@@ -50,6 +51,7 @@ function setup() {
   const store = new MemoryStore();
   const publisher = new RecordingPublisher();
   const queue = new LoggingProvisioningQueue();
+  const mails: MailMessage[] = [];
   const { app, internal } = buildApi({
     store,
     publisher,
@@ -64,13 +66,15 @@ function setup() {
     logLevel: 'silent',
     collectDefaultMetrics: false,
     superAdminEmails: ['boss@ibos.io'],
+    mailer: { send: async (m) => void mails.push(m) },
+    dashboardUrl: 'https://dash.platform.test',
   });
   const auth = { authorization: `Bearer ${ADMIN}` };
   const call = async (method: 'GET' | 'POST' | 'PATCH' | 'DELETE', url: string, payload?: object) => {
     const res = await app.inject({ method, url, headers: auth, payload });
     return { status: res.statusCode, body: res.body ? res.json() : undefined };
   };
-  return { app, internal, store, publisher, queue, call };
+  return { app, internal, store, publisher, queue, call, mails };
 }
 
 let t: ReturnType<typeof setup>;
@@ -393,12 +397,17 @@ describe('accounts and workspaces', () => {
     method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
     url: string,
     payload?: object,
+    issuedAt?: number,
   ) => {
     const res = await t.app.inject({
       method,
       url,
       payload,
-      headers: { authorization: `Bearer ${ADMIN}`, 'x-sst-user': userId },
+      headers: {
+        authorization: `Bearer ${ADMIN}`,
+        'x-sst-user': userId,
+        'x-sst-session-issued-at': String(issuedAt ?? Math.floor(Date.now() / 1000)),
+      },
     });
     return { status: res.statusCode, body: res.body ? res.json() : undefined };
   };
@@ -487,6 +496,11 @@ describe('accounts and workspaces', () => {
       email: 'Guest@Example.com',
     });
     expect(invited.body.invited.email).toBe('guest@example.com');
+    expect(invited.body.emailed).toBe(true);
+    expect(t.mails).toHaveLength(1);
+    expect(t.mails[0]!.to).toBe('guest@example.com');
+    expect(t.mails[0]!.subject).toContain("invited you to owner's workspace");
+    expect(t.mails[0]!.text).toContain('https://dash.platform.test/login');
 
     // A password sign-up cannot prove the address, so it does not get the invite.
     const pw = await signUp('guest@example.com');
@@ -528,5 +542,50 @@ describe('accounts and workspaces', () => {
     );
     expect(workspaces.find((w) => w.id === legacy.body.id)!.role).toBe('owner');
     expect((await newContainer(g.body.user.id, other.workspaces[0]!.id)).status).toBe(201);
+  });
+
+  it('resets a password by email link, once, and ends older sessions', async () => {
+    const ana = await signUp('reset@example.com', 'old password');
+    const reset = (email: string) => t.call('POST', '/v1/auth/password-reset', { email });
+
+    // Unknown addresses get the same answer and no email.
+    expect((await reset('nobody@example.com')).status).toBe(202);
+    expect(t.mails).toHaveLength(0);
+
+    expect((await reset('RESET@example.com')).status).toBe(202);
+    expect(t.mails).toHaveLength(1);
+    expect(t.mails[0]!.to).toBe('reset@example.com');
+    const link = new URL(
+      /https:\/\/dash\.platform\.test\/reset-password\?token=\S+/.exec(t.mails[0]!.text)![0],
+    );
+    const token = link.searchParams.get('token')!;
+    expect(await t.store.getPasswordResetByTokenHash(token)).toBeNull(); // only the hash is stored
+
+    const oldSession = Math.floor(Date.now() / 1000) - 60;
+    expect((await as(ana.user.id, 'GET', '/v1/me', undefined, oldSession)).status).toBe(200);
+
+    const confirm = (password: string, tok = token) =>
+      t.call('POST', '/v1/auth/password-reset/confirm', { token: tok, password });
+    expect((await confirm('short')).status).toBe(400);
+    const done = await confirm('brand new password');
+    expect(done.status).toBe(200);
+    expect(done.body.user.emailVerified).toBe(true);
+    expect((await confirm('another new password')).status).toBe(400);
+    expect((await confirm('another new password', 'x'.repeat(43))).status).toBe(400);
+
+    expect((await signIn('reset@example.com', 'old password')).status).toBe(401);
+    expect((await signIn('reset@example.com', 'brand new password')).status).toBe(200);
+    expect((await as(ana.user.id, 'GET', '/v1/me', undefined, oldSession)).body.error).toBe(
+      'session_revoked',
+    );
+    expect((await as(ana.user.id, 'GET', '/v1/me')).status).toBe(200);
+  });
+
+  it('limits reset emails per address', async () => {
+    await signUp('many@example.com');
+    for (let i = 0; i < 5; i++)
+      await t.call('POST', '/v1/auth/password-reset', { email: 'many@example.com' });
+    expect(t.mails).toHaveLength(3);
+    expect((await t.call('POST', '/v1/auth/password-reset', { email: 'many@example.com' })).status).toBe(429);
   });
 });

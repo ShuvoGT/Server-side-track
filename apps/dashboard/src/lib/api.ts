@@ -1,4 +1,5 @@
 import 'server-only';
+import { redirect } from 'next/navigation';
 import { env } from './env';
 import { getSession } from './session';
 import type {
@@ -38,6 +39,7 @@ const MESSAGES: Record<string, string> = {
   not_found: 'Not found.',
   unauthorized: 'The dashboard is not authorized to call the API. Check ADMIN_API_KEY.',
   unknown_user: 'Your account no longer exists. Sign in again.',
+  session_revoked: 'Your password was changed. Sign in again.',
 };
 
 /**
@@ -46,13 +48,18 @@ const MESSAGES: Record<string, string> = {
  */
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
   const session = await getSession();
+  // Without x-sst-user the admin key alone would see every workspace: only sign-in calls may go without a user.
+  if (!session && !path.startsWith('/v1/auth/')) redirect('/login');
   let response: Response;
   try {
     response = await fetch(new URL(path, env().API_URL), {
       method,
       headers: {
         authorization: `Bearer ${env().ADMIN_API_KEY}`,
-        ...(session && { 'x-sst-user': session.userId }),
+        ...(session && {
+          'x-sst-user': session.userId,
+          'x-sst-session-issued-at': String(session.issuedAt),
+        }),
         ...(body !== undefined && { 'content-type': 'application/json' }),
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -95,13 +102,20 @@ export const api = {
   signInWithGoogle: (profile: { sub: string; email: string; emailVerified: boolean; name: string }) =>
     call<Me>('POST', '/v1/auth/google', profile),
   me: () => call<Me>('GET', '/v1/me'),
+  requestPasswordReset: (email: string, clientIp?: string) =>
+    call<{ sent: boolean }>('POST', '/v1/auth/password-reset', { email, clientIp }),
+  resetPassword: (token: string, password: string) =>
+    call<Me>('POST', '/v1/auth/password-reset/confirm', { token, password }),
 
   workspaces: () => call<Workspace[]>('GET', '/v1/tenants'),
   createWorkspace: (name: string) => call<Tenant>('POST', '/v1/tenants', { name }),
   renameWorkspace: (id: string, name: string) => call<Tenant>('PATCH', ws(id), { name }),
   members: (id: string) => call<{ members: Member[]; invites: Invite[] }>('GET', `${ws(id)}/members`),
   addMember: (id: string, email: string, role: Role) =>
-    call<{ added?: { email: string }; invited?: Invite }>('POST', `${ws(id)}/members`, { email, role }),
+    call<{ added?: { email: string }; invited?: Invite; emailed: boolean }>('POST', `${ws(id)}/members`, {
+      email,
+      role,
+    }),
   changeRole: (id: string, userId: string, role: Role) =>
     call<{ userId: string; role: Role }>('PATCH', `${ws(id)}/members/${encodeURIComponent(userId)}`, {
       role,

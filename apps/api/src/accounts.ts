@@ -1,4 +1,10 @@
-import { randomBytes, scrypt as scryptCallback, timingSafeEqual, type ScryptOptions } from 'node:crypto';
+import {
+  createHash,
+  randomBytes,
+  scrypt as scryptCallback,
+  timingSafeEqual,
+  type ScryptOptions,
+} from 'node:crypto';
 import { newId, type User } from './model.js';
 import { DuplicateEmailError, type Store } from './store.js';
 
@@ -33,6 +39,10 @@ export async function verifyPassword(password: string, stored: string): Promise<
 }
 
 export const normalizeEmail = (email: string) => email.trim().toLowerCase();
+
+const RESET_TTL_MS = 3_600_000;
+const RESETS_PER_HOUR = 3;
+const hashToken = (token: string) => createHash('sha256').update(token).digest('hex');
 
 // A hash to check against when the address is unknown, so a failed login takes as long either way.
 const dummyHash = hashPassword(randomBytes(16).toString('hex'));
@@ -75,6 +85,7 @@ export class Accounts {
         emailVerified: false,
         createdAt: new Date(),
         lastLoginAt: null,
+        passwordChangedAt: null,
       });
       return await this.afterSignIn(user);
     } catch (error) {
@@ -105,7 +116,8 @@ export class Accounts {
         user = await this.store.updateUser(existing.id, {
           googleSub: profile.sub,
           emailVerified: true,
-          ...(!existing.emailVerified && { passwordHash: null }),
+          // ...and is signed out everywhere.
+          ...(!existing.emailVerified && { passwordHash: null, passwordChangedAt: new Date() }),
         });
       } else {
         user = await this.store.createUser({
@@ -117,9 +129,49 @@ export class Accounts {
           emailVerified: true,
           createdAt: new Date(),
           lastLoginAt: null,
+          passwordChangedAt: null,
         });
       }
     }
+    return this.afterSignIn(user);
+  }
+
+  /**
+   * A one-hour, single-use link to set a new password. Null when there is no such account or too many links
+   * were asked for; the caller answers the same either way, so the form does not reveal who has an account.
+   */
+  async requestPasswordReset(emailInput: string): Promise<{ user: User; token: string } | null> {
+    const user = await this.store.getUserByEmail(normalizeEmail(emailInput));
+    if (!user) return null;
+    const now = Date.now();
+    if ((await this.store.countPasswordResetsSince(user.id, new Date(now - 3_600_000))) >= RESETS_PER_HOUR)
+      return null;
+    const token = randomBytes(32).toString('base64url');
+    await this.store.createPasswordReset({
+      id: newId('pwr'),
+      userId: user.id,
+      tokenHash: hashToken(token),
+      expiresAt: new Date(now + RESET_TTL_MS),
+      usedAt: null,
+      createdAt: new Date(now),
+    });
+    return { user, token };
+  }
+
+  /**
+   * Sets the new password from a reset link. Receiving the email proves the address, so the account counts as
+   * verified from then on; every other session of the account ends.
+   */
+  async resetPassword(token: string, password: string): Promise<User | 'invalid_token'> {
+    const reset = await this.store.getPasswordResetByTokenHash(hashToken(token));
+    if (!reset || reset.usedAt || reset.expiresAt.getTime() < Date.now()) return 'invalid_token';
+    const now = new Date();
+    await this.store.usePasswordResets(reset.userId, now);
+    const user = await this.store.updateUser(reset.userId, {
+      passwordHash: await hashPassword(password),
+      emailVerified: true,
+      passwordChangedAt: now,
+    });
     return this.afterSignIn(user);
   }
 

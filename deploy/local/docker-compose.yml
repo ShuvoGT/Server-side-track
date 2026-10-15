@@ -43,6 +43,9 @@ services:
       # Placeholder until the provisioner reports where each container's tagging server runs.
       TAGGING_UPSTREAM_TEMPLATE: http://sst-{id}-tagging:8080
       SUPER_ADMIN_EMAILS: ${SUPER_ADMIN_EMAILS:-}
+      SMTP_URL: ${SMTP_URL:-}
+      MAIL_FROM: ${MAIL_FROM:-}
+      DASHBOARD_URL: ${DASHBOARD_URL:-http://localhost:3100}
     volumes: [apidata:/app/data]
     ports: ['3000:3000']
     depends_on:

@@ -12,6 +12,7 @@ import {
   powerUpsSchema,
 } from '@sst/shared';
 import { Accounts, MIN_PASSWORD_LENGTH, normalizeEmail, SignInLimiter } from './accounts.js';
+import { passwordResetMail, workspaceInviteMail, type Mailer } from './mailer.js';
 import {
   containerView,
   newId,
@@ -52,6 +53,10 @@ export interface ApiDeps {
   collectDefaultMetrics?: boolean;
   /** Addresses with access to every workspace, once Google has verified them. */
   superAdminEmails?: string[];
+  /** Sends password reset links; without it, password reset answers 503. */
+  mailer?: Mailer;
+  /** The dashboard's public address, for links in emails. */
+  dashboardUrl?: string;
 }
 
 /** The signed-in dashboard user a /v1 request acts for (x-sst-user), or null for the admin key alone. */
@@ -124,6 +129,11 @@ const googleBody = z.object({
   email: z.email().max(254),
   emailVerified: z.boolean(),
   name: z.string().max(100).default(''),
+});
+const resetRequestBody = z.object({ email: z.string().max(254), clientIp: z.string().max(100).optional() });
+const resetConfirmBody = z.object({
+  token: z.string().min(20).max(200),
+  password: z.string().min(MIN_PASSWORD_LENGTH).max(200),
 });
 const roleSchema = z.enum(['owner', 'member']);
 const addMemberBody = z.object({ email: z.email().max(254), role: roleSchema.default('member') });
@@ -199,6 +209,8 @@ export function buildApi(deps: ApiDeps): { app: FastifyInstance; internal: Fasti
 
   const accounts = new Accounts(store, deps.superAdminEmails ?? []);
   const signInLimiter = new SignInLimiter();
+  // Reset emails per client: a few per hour is plenty for people, and keeps the form from being used to spam.
+  const resetLimiter = new SignInLimiter(5, 3_600_000);
 
   // A workspace the actor may not see answers 404 like a missing one, so ids cannot be probed.
   const canSee = (req: FastifyRequest, tenantId: string) =>
@@ -276,6 +288,10 @@ export function buildApi(deps: ApiDeps): { app: FastifyInstance; internal: Fasti
         if (typeof userId === 'string' && userId) {
           const user = await store.getUser(userId);
           if (!user) throw new HttpError(401, 'unknown_user');
+          // A password change (or reset) ends the sessions that signed in before it.
+          const issuedAt = Number(req.headers['x-sst-session-issued-at']) * 1000;
+          if (user.passwordChangedAt && !(issuedAt + 1000 >= user.passwordChangedAt.getTime()))
+            throw new HttpError(401, 'session_revoked');
           const memberships = await store.listUserMemberships(user.id);
           req.actor = {
             user,
@@ -323,6 +339,49 @@ export function buildApi(deps: ApiDeps): { app: FastifyInstance; internal: Fasti
         const user = await accounts.signInWithGoogle(googleBody.parse(req.body));
         if (user === 'email_not_verified')
           throw new HttpError(403, 'email_not_verified', 'Google has not verified this email address.');
+        return sessionView(user);
+      });
+
+      /** Emails a reset link. Answers the same whether or not the address has an account. */
+      v1.post('/auth/password-reset', async (req, reply) => {
+        const body = resetRequestBody.parse(req.body);
+        if (!deps.mailer || !deps.dashboardUrl)
+          throw new HttpError(
+            503,
+            'mail_not_configured',
+            'Password reset by email is not set up on this server.',
+          );
+        const keys = [
+          `email:${normalizeEmail(body.email)}`,
+          ...(body.clientIp ? [`ip:${body.clientIp}`] : []),
+        ];
+        if (resetLimiter.blocked(...keys))
+          throw new HttpError(429, 'too_many_attempts', 'Too many reset requests. Try again in an hour.');
+        resetLimiter.fail(...keys);
+        const reset = await accounts.requestPasswordReset(body.email);
+        if (reset) {
+          const link = new URL('/reset-password', deps.dashboardUrl);
+          link.searchParams.set('token', reset.token);
+          try {
+            await deps.mailer.send(passwordResetMail(reset.user.email, reset.user.name, link.toString()));
+          } catch (err) {
+            // Not reported to the caller, which would tell who has an account.
+            req.log.error({ err }, 'password reset email failed');
+          }
+        }
+        return reply.code(202).send({ sent: true });
+      });
+
+      v1.post('/auth/password-reset/confirm', async (req) => {
+        const body = resetConfirmBody.parse(req.body);
+        const user = await accounts.resetPassword(body.token, body.password);
+        if (user === 'invalid_token')
+          throw new HttpError(
+            400,
+            'invalid_token',
+            'This reset link is invalid, used or expired. Ask for a new one.',
+          );
+        signInLimiter.succeed(`email:${user.email}`);
         return sessionView(user);
       });
 
@@ -378,6 +437,30 @@ export function buildApi(deps: ApiDeps): { app: FastifyInstance; internal: Fasti
         const body = addMemberBody.parse(req.body);
         const email = normalizeEmail(body.email);
         const user = await store.getUserByEmail(email);
+
+        /** Best effort: the membership or invite stands even if the email cannot be sent. */
+        const notify = async (added: boolean) => {
+          if (!deps.mailer || !deps.dashboardUrl) return false;
+          const inviter = req.actor ? req.actor.user.name || req.actor.user.email : 'A workspace owner';
+          const link = new URL('/login', deps.dashboardUrl).toString();
+          try {
+            await deps.mailer.send(
+              workspaceInviteMail({
+                to: email,
+                inviter,
+                workspace: tenant.name,
+                role: body.role,
+                added,
+                link,
+              }),
+            );
+            return true;
+          } catch (err) {
+            req.log.error({ err }, 'invite email failed');
+            return false;
+          }
+        };
+
         if (user?.emailVerified) {
           await store.putMembership({
             userId: user.id,
@@ -385,7 +468,8 @@ export function buildApi(deps: ApiDeps): { app: FastifyInstance; internal: Fasti
             role: body.role,
             createdAt: new Date(),
           });
-          return reply.code(201).send({ added: { userId: user.id, email, role: body.role } });
+          const emailed = await notify(true);
+          return reply.code(201).send({ added: { userId: user.id, email, role: body.role }, emailed });
         }
         const invite = await store.putInvite({
           id: newId('inv'),
@@ -394,7 +478,8 @@ export function buildApi(deps: ApiDeps): { app: FastifyInstance; internal: Fasti
           role: body.role,
           createdAt: new Date(),
         });
-        return reply.code(201).send({ invited: invite });
+        const emailed = await notify(false);
+        return reply.code(201).send({ invited: invite, emailed });
       });
 
       v1.patch<{ Params: { id: string; userId: string } }>('/tenants/:id/members/:userId', async (req) => {

@@ -50,6 +50,10 @@ services:
       EDGE_IPV4: ${EDGE_IPV4:-}
       TAGGING_UPSTREAM_TEMPLATE: http://sst-{id}-tagging:8080
       SUPER_ADMIN_EMAILS: ${SUPER_ADMIN_EMAILS:-}
+      # Optional password reset by email, e.g. smtps://user:password@smtp.example.com:465
+      SMTP_URL: ${SMTP_URL:-}
+      MAIL_FROM: ${MAIL_FROM:-}
+      DASHBOARD_URL: https://${DASHBOARD_HOST:?run setup.sh first}
     volumes: [apidata:/app/data]
     depends_on:
       postgres: { condition: service_healthy }

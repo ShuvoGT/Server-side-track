@@ -41,11 +41,18 @@ export function unseal(value: string | undefined): string | null {
 
 export interface Session {
   userId: string;
+  /** Unix seconds. The API refuses sessions older than the account's last password change. */
+  issuedAt: number;
 }
 
 export async function createSession(userId: string): Promise<void> {
-  const expires = Math.floor(Date.now() / 1000) + MAX_AGE_SECONDS;
-  (await cookies()).set(COOKIE, sealed(`v2.${userId}.${expires}`), cookieOptions(MAX_AGE_SECONDS));
+  const issuedAt = Math.floor(Date.now() / 1000);
+  const expires = issuedAt + MAX_AGE_SECONDS;
+  (await cookies()).set(
+    COOKIE,
+    sealed(`v3.${userId}.${issuedAt}.${expires}`),
+    cookieOptions(MAX_AGE_SECONDS),
+  );
 }
 
 export async function destroySession(): Promise<void> {
@@ -56,9 +63,9 @@ export async function destroySession(): Promise<void> {
 
 export async function getSession(): Promise<Session | null> {
   const payload = unseal((await cookies()).get(COOKIE)?.value);
-  const [version, userId, expires] = payload?.split('.') ?? [];
-  if (version !== 'v2' || !userId || !(Number(expires) > Date.now() / 1000)) return null;
-  return { userId };
+  const [version, userId, issuedAt, expires] = payload?.split('.') ?? [];
+  if (version !== 'v3' || !userId || !(Number(expires) > Date.now() / 1000)) return null;
+  return { userId, issuedAt: Number(issuedAt) };
 }
 
 /** Call at the top of every protected page, route handler and server action. */

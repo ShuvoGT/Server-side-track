@@ -1,6 +1,6 @@
 import { Prisma, PrismaClient } from '@prisma/client';
 import { powerUpsSchema } from '@sst/shared';
-import type { Container, Domain, Invite, Membership, UsageCounts, User } from './model.js';
+import type { Container, Domain, Invite, Membership, PasswordReset, UsageCounts, User } from './model.js';
 import { importFromSqlite } from './sqliteImport.js';
 import {
   DuplicateEmailError,
@@ -117,6 +117,19 @@ export class PrismaStore implements Store {
   }
   async deleteInvite(id: string) {
     await this.db.invite.deleteMany({ where: { id } });
+  }
+
+  createPasswordReset(reset: PasswordReset) {
+    return this.db.passwordReset.create({ data: reset });
+  }
+  getPasswordResetByTokenHash(tokenHash: string) {
+    return this.db.passwordReset.findUnique({ where: { tokenHash } });
+  }
+  async usePasswordResets(userId: string, at: Date) {
+    await this.db.passwordReset.updateMany({ where: { userId, usedAt: null }, data: { usedAt: at } });
+  }
+  countPasswordResetsSince(userId: string, since: Date) {
+    return this.db.passwordReset.count({ where: { userId, createdAt: { gte: since } } });
   }
 
   async createContainer(container: Container) {

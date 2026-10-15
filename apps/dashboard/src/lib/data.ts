@@ -2,7 +2,7 @@ import 'server-only';
 import { notFound, redirect } from 'next/navigation';
 import { cache } from 'react';
 import { api, ApiError } from './api';
-import { selectedWorkspaceId } from './session';
+import { requireSession, selectedWorkspaceId } from './session';
 
 /** Loads a container once per request, shared by the layout and the page; 404s for unknown ids. */
 export const getContainer = cache(async (id: string) => {
@@ -16,10 +16,12 @@ export const getContainer = cache(async (id: string) => {
 
 /** The signed-in user and their workspaces, once per request. A deleted account goes back to sign-in. */
 export const getMe = cache(async () => {
+  // Pages render alongside the layout, so each checks the session itself (e.g. a cookie from an older version).
+  await requireSession();
   try {
     return await api.me();
   } catch (error) {
-    if (error instanceof ApiError && error.status === 401) redirect('/logout');
+    if (error instanceof ApiError && (error.status === 401 || error.code === 'no_user')) redirect('/logout');
     throw error;
   }
 });

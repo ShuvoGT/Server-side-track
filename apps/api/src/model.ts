@@ -23,6 +23,18 @@ export interface User {
   emailVerified: boolean;
   createdAt: Date;
   lastLoginAt: Date | null;
+  /** Sessions signed in before this are no longer accepted. */
+  passwordChangedAt: Date | null;
+}
+
+export interface PasswordReset {
+  id: string;
+  userId: string;
+  /** SHA-256 of the token in the emailed link; the token itself is never stored. */
+  tokenHash: string;
+  expiresAt: Date;
+  usedAt: Date | null;
+  createdAt: Date;
 }
 
 export interface Membership {
@@ -90,7 +102,7 @@ const ID_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
  * Prefixed random ids. Container ids also name Kubernetes namespaces (ctr-<id>), so they stay lower-case
  * alphanumeric and short.
  */
-export function newId(prefix: 'tnt' | 'c' | 'dom' | 'usr' | 'inv'): string {
+export function newId(prefix: 'tnt' | 'c' | 'dom' | 'usr' | 'inv' | 'pwr'): string {
   let id = '';
   for (const byte of randomBytes(12)) id += ID_ALPHABET[byte % ID_ALPHABET.length];
   return `${prefix}${id}`;

@@ -1,4 +1,14 @@
-import type { Container, Domain, Invite, Membership, Tenant, UsageCounts, UsageHour, User } from './model.js';
+import type {
+  Container,
+  Domain,
+  Invite,
+  Membership,
+  PasswordReset,
+  Tenant,
+  UsageCounts,
+  UsageHour,
+  User,
+} from './model.js';
 
 export type ContainerPatch = Partial<
   Pick<
@@ -19,7 +29,7 @@ export type ContainerPatch = Partial<
 export type DomainPatch = Partial<Pick<Domain, 'status' | 'verifiedAt' | 'lastCheckedAt' | 'lastError'>>;
 
 export type UserPatch = Partial<
-  Pick<User, 'name' | 'passwordHash' | 'googleSub' | 'emailVerified' | 'lastLoginAt'>
+  Pick<User, 'name' | 'passwordHash' | 'googleSub' | 'emailVerified' | 'lastLoginAt' | 'passwordChangedAt'>
 >;
 
 export class DuplicateHostnameError extends Error {}
@@ -54,6 +64,13 @@ export interface Store {
   listInvites(tenantId: string): Promise<Invite[]>;
   listInvitesForEmail(email: string): Promise<Invite[]>;
   deleteInvite(id: string): Promise<void>;
+
+  createPasswordReset(reset: PasswordReset): Promise<PasswordReset>;
+  getPasswordResetByTokenHash(tokenHash: string): Promise<PasswordReset | null>;
+  /** Marks every unused reset link of the user as used. */
+  usePasswordResets(userId: string, at: Date): Promise<void>;
+  /** Links created for the user since the given time, for rate limiting. */
+  countPasswordResetsSince(userId: string, since: Date): Promise<number>;
 
   createContainer(container: Container): Promise<Container>;
   getContainer(id: string): Promise<Container | null>;

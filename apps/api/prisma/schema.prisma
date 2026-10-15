@@ -22,18 +22,34 @@ model Tenant {
 
 /// A person who signs in to the dashboard, with a password, Google, or both.
 model User {
-  id            String       @id
+  id                String          @id
   /// Lower-case.
-  email         String       @unique
-  name          String
+  email             String          @unique
+  name              String
   /// scrypt hash; null for Google-only accounts.
-  passwordHash  String?
-  googleSub     String?      @unique
+  passwordHash      String?
+  googleSub         String?         @unique
   /// True once Google confirmed the address. Invites and super-admin rights need a verified address.
-  emailVerified Boolean      @default(false)
-  createdAt     DateTime     @default(now())
-  lastLoginAt   DateTime?
-  memberships   Membership[]
+  emailVerified     Boolean         @default(false)
+  createdAt         DateTime        @default(now())
+  lastLoginAt       DateTime?
+  /// Sessions signed in before this are no longer accepted.
+  passwordChangedAt DateTime?
+  memberships       Membership[]
+  passwordResets    PasswordReset[]
+}
+
+/// A password reset link sent by email. Only the token's SHA-256 is stored; each link works once, for an hour.
+model PasswordReset {
+  id        String    @id
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
 }
 
 enum Role {

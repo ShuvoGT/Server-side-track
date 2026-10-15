@@ -2,6 +2,7 @@ import { Redis } from 'ioredis';
 import { buildApi, resyncRoutes } from './app.js';
 import { loadConfig } from './config.js';
 import { MemoryStore } from './memoryStore.js';
+import { smtpMailer } from './mailer.js';
 import { migrateDatabase } from './migrate.js';
 import { PrismaStore } from './prismaStore.js';
 import {
@@ -45,9 +46,14 @@ async function main() {
     upstreamTemplate: config.TAGGING_UPSTREAM_TEMPLATE,
     logLevel: config.LOG_LEVEL,
     superAdminEmails: config.SUPER_ADMIN_EMAILS,
+    mailer: config.SMTP_URL
+      ? smtpMailer(config.SMTP_URL, config.MAIL_FROM ?? 'no-reply@localhost')
+      : undefined,
+    dashboardUrl: config.DASHBOARD_URL,
   });
   const logger = app.log;
   if (!redis) logger.warn('no REDIS_URL: routes are served to the gateway from the internal API only');
+  if (!config.SMTP_URL) logger.warn('no SMTP_URL: password reset by email is off');
   if (config.STORE === 'memory') logger.warn('STORE=memory: configuration is lost on restart');
   if (imported)
     logger.info(imported, `copied the SQLite database ${config.SQLITE_IMPORT_FILE} into PostgreSQL`);

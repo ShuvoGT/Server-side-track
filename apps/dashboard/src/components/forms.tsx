@@ -11,6 +11,8 @@ import {
   deleteDomain,
   login,
   renameWorkspace,
+  requestPasswordReset,
+  resetPassword,
   signUp,
   provisionAgain,
   regenerateLoaderPaths,
@@ -50,7 +52,12 @@ export function LoginForm({ next }: { next: string }) {
         />
       </div>
       <div className="field">
-        <label htmlFor="password">Password</label>
+        <div className="label-row">
+          <label htmlFor="password">Password</label>
+          <Link href="/forgot-password" className="small">
+            Forgot password?
+          </Link>
+        </div>
         <input
           id="password"
           name="password"
@@ -62,6 +69,68 @@ export function LoginForm({ next }: { next: string }) {
       </div>
       {state.error && <Alert tone="critical">{state.error}</Alert>}
       <SubmitButton pending="Signing in…">Sign in</SubmitButton>
+    </form>
+  );
+}
+
+export function ForgotPasswordForm() {
+  const [state, action] = useActionState(requestPasswordReset, {});
+  if (state.ok) return <Alert tone="good">{state.message}</Alert>;
+  return (
+    <form action={action} className="stack">
+      <div className="field">
+        <label htmlFor="email">Email</label>
+        <input
+          id="email"
+          name="email"
+          type="email"
+          className="input"
+          autoComplete="email"
+          defaultValue={state.values?.email}
+          autoFocus
+          required
+        />
+      </div>
+      {state.error && <Alert tone="critical">{state.error}</Alert>}
+      <SubmitButton pending="Sending…">Send reset link</SubmitButton>
+    </form>
+  );
+}
+
+export function ResetPasswordForm({ token }: { token: string }) {
+  const [state, action] = useActionState(resetPassword.bind(null, token), {});
+  return (
+    <form action={action} className="stack">
+      <div className="field">
+        <label htmlFor="password">New password</label>
+        <input
+          id="password"
+          name="password"
+          type="password"
+          className="input"
+          autoComplete="new-password"
+          minLength={8}
+          autoFocus
+          required
+        />
+        <span className="hint">
+          At least 8 characters. Every other device you are signed in on is signed out.
+        </span>
+      </div>
+      <div className="field">
+        <label htmlFor="confirm">New password again</label>
+        <input
+          id="confirm"
+          name="confirm"
+          type="password"
+          className="input"
+          autoComplete="new-password"
+          minLength={8}
+          required
+        />
+      </div>
+      {state.error && <Alert tone="critical">{state.error}</Alert>}
+      <SubmitButton pending="Saving…">Set new password</SubmitButton>
     </form>
   );
 }

@@ -132,6 +132,10 @@ workspaces (other workspaces' containers answer 404). Requests with the admin ke
 - `SUPER_ADMIN_EMAILS` (API, comma-separated) see every workspace. On their first Google sign-in they become
   owners of workspaces that have no members, such as those created before accounts existed.
 - Passwords are scrypt hashes; ten failed sign-ins for an address or client block it for 15 minutes.
+- **Forgot password?** emails a link that works once, for an hour (only its SHA-256 is stored). Setting the new
+  password proves the address and signs the account out everywhere else. Needs `SMTP_URL` (e.g.
+  `smtps://user:password@smtp.example.com:465`), `MAIL_FROM` and `DASHBOARD_URL` on the API; without them the
+  form says reset is not set up. The form answers the same for unknown addresses.
 - Google OAuth client: Google Cloud Console › APIs & Services › Credentials › OAuth client ID (Web application),
   redirect URI `<DASHBOARD_URL>/api/auth/google/callback`.
 
@@ -244,7 +248,7 @@ tagging and preview servers are services of the project.
 | `travilo-preview.ibos.agency` | `sst-chukjbhcigtx2-preview:8080` | GTM server Preview for travilo.io                            |
 | `pgadmin.ibos.agency`         | `pgadmin:80`                     | pgAdmin for the live PostgreSQL (login: Openship variables)  |
 
-Secrets (`ADMIN_API_KEY`, `INTERNAL_API_TOKEN`, `SESSION_SECRET`, `GOOGLE_CLIENT_ID`/`_SECRET`, `SUPER_ADMIN_EMAILS`, `POSTGRES_PASSWORD`,
+Secrets (`ADMIN_API_KEY`, `INTERNAL_API_TOKEN`, `SESSION_SECRET`, `GOOGLE_CLIENT_ID`/`_SECRET`, `SUPER_ADMIN_EMAILS`, `SMTP_URL`, `MAIL_FROM`, `POSTGRES_PASSWORD`,
 `DATABASE_URL`) and `EDGE_HOSTNAME` / `EDGE_IPV4` are Openship project variables; each tagging service's `CONTAINER_CONFIG` is a service variable. None
 are in the repository. Deploys are folder uploads with the compose file at the archive root (build contexts
 rewritten from `../..` to `.`); redeploy only the services that changed, never `redis` or `postgres`.

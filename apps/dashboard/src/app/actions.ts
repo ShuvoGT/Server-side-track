@@ -84,6 +84,36 @@ export async function signUp(_prev: ActionState, form: FormData): Promise<Action
   return startSession(me, '/');
 }
 
+export async function requestPasswordReset(_prev: ActionState, form: FormData): Promise<ActionState> {
+  const email = text(form, 'email');
+  if (!email) return { error: 'Enter the email address of your account.' };
+  try {
+    await api.requestPasswordReset(email, await clientIp());
+  } catch (error) {
+    if (error instanceof ApiError) return { error: error.message, values: { email } };
+    throw error;
+  }
+  return {
+    ok: true,
+    message: `If ${email} has an account, a link to set a new password is on its way. It works for one hour.`,
+  };
+}
+
+export async function resetPassword(token: string, _prev: ActionState, form: FormData): Promise<ActionState> {
+  const password = String(form.get('password') ?? '');
+  if (password.length < 8) return { error: 'Use a password of at least 8 characters.' };
+  if (password !== String(form.get('confirm') ?? '')) return { error: 'The two passwords differ.' };
+  let me: Me;
+  try {
+    me = await api.resetPassword(token, password);
+  } catch (error) {
+    if (error instanceof ApiError)
+      return { error: error.code === 'invalid_request' ? 'This reset link is not valid.' : error.message };
+    throw error;
+  }
+  return startSession(me, '/');
+}
+
 export async function logout(): Promise<void> {
   await destroySession();
   redirect('/login');
@@ -128,11 +158,12 @@ export async function addMember(workspaceId: string, _prev: ActionState, form: F
     const role = (text(form, 'role') === 'owner' ? 'owner' : 'member') as Role;
     const result = await api.addMember(workspaceId, email, role);
     revalidatePath('/workspace');
+    const mailed = result.emailed ? ' We emailed them.' : ' No email was sent: tell them yourself.';
     return {
       ok: true,
       message: result.added
-        ? `${result.added.email} is now a member.`
-        : `Invited ${result.invited?.email}. They join when they sign in with Google using that address.`,
+        ? `${result.added.email} is now a member.${mailed}`
+        : `Invited ${result.invited?.email}. They join when they sign in with Google using that address.${mailed}`,
     };
   });
 }

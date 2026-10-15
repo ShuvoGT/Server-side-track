@@ -1,4 +1,14 @@
-import type { Container, Domain, Invite, Membership, Tenant, UsageCounts, UsageHour, User } from './model.js';
+import type {
+  Container,
+  Domain,
+  Invite,
+  Membership,
+  PasswordReset,
+  Tenant,
+  UsageCounts,
+  UsageHour,
+  User,
+} from './model.js';
 import {
   DuplicateEmailError,
   DuplicateHostnameError,
@@ -21,6 +31,7 @@ export class MemoryStore implements Store {
   /** Keyed by `${userId}|${tenantId}`. */
   private memberships = new Map<string, Membership>();
   private invites = new Map<string, Invite>();
+  private passwordResets = new Map<string, PasswordReset>();
 
   async ping() {}
 
@@ -101,6 +112,22 @@ export class MemoryStore implements Store {
   }
   async deleteInvite(id: string) {
     this.invites.delete(id);
+  }
+
+  async createPasswordReset(reset: PasswordReset) {
+    this.passwordResets.set(reset.id, reset);
+    return reset;
+  }
+  async getPasswordResetByTokenHash(tokenHash: string) {
+    return [...this.passwordResets.values()].find((r) => r.tokenHash === tokenHash) ?? null;
+  }
+  async usePasswordResets(userId: string, at: Date) {
+    for (const [id, r] of this.passwordResets)
+      if (r.userId === userId && !r.usedAt) this.passwordResets.set(id, { ...r, usedAt: at });
+  }
+  async countPasswordResetsSince(userId: string, since: Date) {
+    return [...this.passwordResets.values()].filter((r) => r.userId === userId && r.createdAt >= since)
+      .length;
   }
 
   async createContainer(container: Container) {

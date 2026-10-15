@@ -37,6 +37,12 @@ const configSchema = z.object({
   EDGE_IPV4: csv,
   /** Where the gateway reaches a container's tagging servers. {id} is replaced with the container id. */
   TAGGING_UPSTREAM_TEMPLATE: z.string().default('http://tagging.ctr-{id}.svc.cluster.local:8080'),
+  /** SMTP server for password reset emails, e.g. smtps://user:password@smtp.example.com:465. */
+  SMTP_URL: optionalString,
+  /** Sender of those emails, e.g. "Tracking Platform <no-reply@example.com>". */
+  MAIL_FROM: optionalString,
+  /** The dashboard's public address, for links in emails. */
+  DASHBOARD_URL: z.url().default('http://localhost:3100'),
   /** Comma-separated addresses that see every workspace, once they sign in with Google. */
   SUPER_ADMIN_EMAILS: csv,
   USAGE_ROLLUP_MS: z.coerce.number().int().min(10_000).default(60_000),
