@@ -1,17 +1,19 @@
 # Openship deployment: the platform behind Openship's own HTTPS edge (OpenResty on 80/443).
 # Openship routes the public URLs, so no service publishes host ports and there is no Caddy here.
 #
-# ibos-34 is a shared server, so nothing here gets the host's Docker socket. Instead:
-# - Each platform container's Google tagging and preview servers are services of this project, named
-#   sst-<container id>-tagging / sst-<container id>-preview (the gateway reaches them by that name).
-#   Adding a website container therefore means adding its two services here and redeploying.
-# - The provisioner runs with DRIVER=external: it starts nothing, it checks each tagging server's /healthy and
-#   reports the container Active or Failed in the dashboard.
-# - Each tracking domain (e.g. ss.travilo.io) is a custom domain on the gateway service in Openship, which issues
-#   its certificate. On a dedicated server, deploy/server does all of this automatically.
+# ibos-34 is a shared server, so nothing here gets the host's Docker socket. Instead the provisioner runs with
+# DRIVER=openship and manages services of this project through Openship's API (token: project variable
+# OPENSHIP_TOKEN):
+# - Each platform container's Google tagging and preview servers are services named sst-<container id>-tagging /
+#   sst-<container id>-preview (the gateway reaches them by that name). The preview server gets the domain
+#   <container id>.preview.ibos.agency (Cloudflare: wildcard *.preview CNAME sst.ibos.agency, DNS only).
+# - Openship keeps one custom domain per service port, so each verified tracking domain gets a small nginx
+#   service sst-<container id>-edge-<host> with that domain, passing everything to the gateway.
+# - These services are not in this file (Travilo's below predate the driver; its ss.travilo.io is on the
+#   gateway). A deploy of the platform must not remove them: send only the services it changes.
 #
 # Secrets (ADMIN_API_KEY, INTERNAL_API_TOKEN, SESSION_SECRET, GOOGLE_CLIENT_ID/SECRET, SUPER_ADMIN_EMAILS,
-# EDGE_HOSTNAME, POSTGRES_PASSWORD
+# EDGE_HOSTNAME, POSTGRES_PASSWORD, OPENSHIP_TOKEN
 # and DATABASE_URL=postgresql://sst:<POSTGRES_PASSWORD>@postgres:5432/sst) are project environment variables in
 # Openship, and each tagging service's CONTAINER_CONFIG is a service variable; none are in this file. They are
 # deliberately not listed below: a `${VAR}` entry here is saved by Openship as an empty service value that
@@ -57,6 +59,8 @@ services:
       SQLITE_IMPORT_FILE: /app/data/sst.db
       REDIS_URL: redis://redis:6379
       TAGGING_UPSTREAM_TEMPLATE: http://sst-{id}-tagging:8080
+      # ibos-34's resolver (the office DNS) has its own copy of some customers' zones; verify against public DNS.
+      DNS_SERVERS: 1.1.1.1,8.8.8.8
     expose: ['3000']
     volumes: [apidata:/app/data]
     depends_on:
@@ -90,8 +94,15 @@ services:
     environment:
       REDIS_URL: redis://redis:6379
       API_INTERNAL_URL: http://api:3001
-      DRIVER: external
+      DRIVER: openship
       EXTERNAL_UPSTREAM_TEMPLATE: http://sst-{id}-tagging:8080
+      OPENSHIP_API_URL: https://deploy.ibos.io/api/proxy/api
+      OPENSHIP_ORGANIZATION_ID: org_xXTwpr2GF2Trhn8lq05bNFWwCJhDqJOR
+      OPENSHIP_PROJECT_ID: proj_LROwX8TSbQIW3JuB
+      OPENSHIP_SERVER_ID: 93f943ec-6e99-44e0-8dd8-4625950764ba
+      PREVIEW_URL_TEMPLATE: https://{id}.preview.ibos.agency
+      # The office DNS does not know the preview names; tagging servers get them in /etc/hosts.
+      OPENSHIP_HOSTS_IP: 103.197.205.34
     depends_on:
       redis: { condition: service_healthy }
       api: { condition: service_started }

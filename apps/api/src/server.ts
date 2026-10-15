@@ -1,3 +1,4 @@
+import { promises as dns } from 'node:dns';
 import { Redis } from 'ioredis';
 import { buildApi, resyncRoutes } from './app.js';
 import { loadConfig } from './config.js';
@@ -34,6 +35,12 @@ async function main() {
         logger.warn({ job }, 'no REDIS_URL: provisioning job not queued'),
       );
 
+  let dnsResolver: dns.Resolver | undefined;
+  if (config.DNS_SERVERS.length > 0) {
+    dnsResolver = new dns.Resolver({ timeout: 5_000, tries: 2 });
+    dnsResolver.setServers(config.DNS_SERVERS);
+  }
+
   const { app, internal } = buildApi({
     store,
     publisher,
@@ -43,6 +50,7 @@ async function main() {
     internalApiToken: config.INTERNAL_API_TOKEN,
     edgeHostname: config.EDGE_HOSTNAME,
     edgeIpv4: config.EDGE_IPV4,
+    dnsResolver,
     upstreamTemplate: config.TAGGING_UPSTREAM_TEMPLATE,
     logLevel: config.LOG_LEVEL,
     superAdminEmails: config.SUPER_ADMIN_EMAILS,

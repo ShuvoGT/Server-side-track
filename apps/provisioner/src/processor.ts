@@ -61,7 +61,11 @@ export async function processJob(job: ProvisioningJob, deps: ProcessorDeps): Pro
     return;
   }
 
-  const spec = { id: container.id, containerConfig: container.containerConfig };
+  const spec = {
+    id: container.id,
+    containerConfig: container.containerConfig,
+    domains: container.domains ?? [],
+  };
   await controlPlane.reportStatus(container.id, {
     status: 'provisioning',
     message: `Starting tagging servers (${driver.name})`,

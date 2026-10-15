@@ -3,6 +3,8 @@ export interface ContainerSpec {
   id: string;
   /** Base64 Container Config from GTM, passed to Google's image as CONTAINER_CONFIG. */
   containerConfig: string;
+  /** Verified tracking domains, for drivers that must set up each one on the platform's edge (Openship). */
+  domains?: string[];
 }
 
 /**

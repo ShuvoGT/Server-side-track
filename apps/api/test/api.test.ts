@@ -272,6 +272,35 @@ describe('domains', () => {
     expect((await t.call('DELETE', `/v1/domains/${d.id}`)).status).toBe(204);
     expect(t.publisher.routes.size).toBe(0);
   });
+
+  it('queues provisioning when a domain is first verified or removed, and gives the provisioner the domains', async () => {
+    const c = await createContainer();
+    const internalContainer = async () =>
+      (
+        await t.internal.inject({
+          url: `/internal/containers/${c.id}`,
+          headers: { authorization: `Bearer ${INTERNAL}` },
+        })
+      ).json();
+    const pending = await t.call('POST', `/v1/containers/${c.id}/domains`, { hostname: 'sst.wrong.com' });
+    expect((await internalContainer()).domains).toEqual([]);
+
+    const d = await addVerifiedDomain(c.id);
+    expect(t.queue.jobs).toHaveLength(2);
+    expect(t.queue.jobs.at(-1)).toEqual({ type: 'apply', containerId: c.id });
+    expect((await internalContainer()).domains).toEqual(['sst.shop.com']);
+
+    // Verifying again changes nothing on the platform.
+    await t.call('POST', `/v1/domains/${d.id}/verify`);
+    expect(t.queue.jobs).toHaveLength(2);
+    // Removing a pending domain neither.
+    await t.call('DELETE', `/v1/domains/${pending.body.id}`);
+    expect(t.queue.jobs).toHaveLength(2);
+
+    await t.call('DELETE', `/v1/domains/${d.id}`);
+    expect(t.queue.jobs).toHaveLength(3);
+    expect((await internalContainer()).domains).toEqual([]);
+  });
 });
 
 describe('checkDomainDns', () => {

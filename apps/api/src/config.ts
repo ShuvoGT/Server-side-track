@@ -35,6 +35,11 @@ const configSchema = z.object({
   EDGE_HOSTNAME: z.string().min(3),
   /** Public IPv4 addresses of the edge, for customers who must use an A record. */
   EDGE_IPV4: csv,
+  /**
+   * DNS servers for checking tracking domains, e.g. 1.1.1.1,8.8.8.8. Empty: the system resolver, which can give a
+   * wrong answer on a server whose resolver has its own copy of a customer's zone.
+   */
+  DNS_SERVERS: csv,
   /** Where the gateway reaches a container's tagging servers. {id} is replaced with the container id. */
   TAGGING_UPSTREAM_TEMPLATE: z.string().default('http://tagging.ctr-{id}.svc.cluster.local:8080'),
   /** Encrypts two-step verification keys in the database. Defaults to a key derived from ADMIN_API_KEY. */

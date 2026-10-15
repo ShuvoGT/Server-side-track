@@ -6,6 +6,8 @@ export interface ContainerRecord {
   containerConfig: string;
   status: 'pending' | 'provisioning' | 'active' | 'failed' | 'deleting';
   upstreamUrl: string;
+  /** Verified tracking domains. */
+  domains?: string[];
 }
 
 export interface StatusReport {

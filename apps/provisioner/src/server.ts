@@ -7,6 +7,8 @@ import { HttpControlPlane } from './controlPlane.js';
 import { DockerDriver } from './drivers/docker.js';
 import { ExternalDriver } from './drivers/external.js';
 import { KubernetesDriver } from './drivers/kubernetes.js';
+import { OpenshipDriver } from './drivers/openship.js';
+import { OpenshipHttpApi } from './drivers/openshipApi.js';
 import type { Driver } from './drivers/types.js';
 import { processJob } from './processor.js';
 
@@ -16,20 +18,38 @@ async function main() {
   const log = app.log;
 
   const driver: Driver =
-    config.DRIVER === 'external'
-      ? new ExternalDriver(config.EXTERNAL_UPSTREAM_TEMPLATE)
-      : config.DRIVER === 'docker'
-        ? new DockerDriver({
+    config.DRIVER === 'openship'
+      ? new OpenshipDriver(
+          new OpenshipHttpApi({
+            baseUrl: config.OPENSHIP_API_URL!,
+            token: config.OPENSHIP_TOKEN!,
+            organizationId: config.OPENSHIP_ORGANIZATION_ID!,
+            projectId: config.OPENSHIP_PROJECT_ID!,
+            serverId: config.OPENSHIP_SERVER_ID!,
+            composePath: config.OPENSHIP_COMPOSE_PATH,
+          }),
+          {
             image: config.TAGGING_IMAGE,
-            network: config.DOCKER_NETWORK,
             previewUrlTemplate: config.PREVIEW_URL_TEMPLATE,
-          })
-        : new KubernetesDriver({
-            image: config.TAGGING_IMAGE,
-            taggingReplicas: config.TAGGING_REPLICAS,
-            gatewayNamespace: config.GATEWAY_NAMESPACE,
-            previewUrlTemplate: config.PREVIEW_URL_TEMPLATE,
-          });
+            upstreamTemplate: config.EXTERNAL_UPSTREAM_TEMPLATE,
+            gatewayUrl: config.OPENSHIP_GATEWAY_URL,
+            hostsIp: config.OPENSHIP_HOSTS_IP,
+          },
+        )
+      : config.DRIVER === 'external'
+        ? new ExternalDriver(config.EXTERNAL_UPSTREAM_TEMPLATE)
+        : config.DRIVER === 'docker'
+          ? new DockerDriver({
+              image: config.TAGGING_IMAGE,
+              network: config.DOCKER_NETWORK,
+              previewUrlTemplate: config.PREVIEW_URL_TEMPLATE,
+            })
+          : new KubernetesDriver({
+              image: config.TAGGING_IMAGE,
+              taggingReplicas: config.TAGGING_REPLICAS,
+              gatewayNamespace: config.GATEWAY_NAMESPACE,
+              previewUrlTemplate: config.PREVIEW_URL_TEMPLATE,
+            });
   const controlPlane = new HttpControlPlane(config.API_INTERNAL_URL, config.INTERNAL_API_TOKEN);
 
   const registry = new Registry();

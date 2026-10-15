@@ -1031,15 +1031,20 @@ export function buildApi(deps: ApiDeps): { app: FastifyInstance; internal: Fasti
           lastError: null,
         });
         await deps.publisher.publish([routeFor(container, updated)]);
+        // Some platforms (Openship) need each tracking domain set up on their edge; the provisioner does that.
+        if (domain.status !== 'verified' && container.status !== 'deleting')
+          await deps.queue.enqueue({ type: 'apply', containerId: container.id });
         return { ...updated, check };
       });
 
       v1.delete<{ Params: { id: string } }>('/domains/:id', async (req, reply) => {
         const domain = await store.getDomain(req.params.id);
         if (!domain) throw notFound('Domain');
-        await getContainerOr404(domain.containerId, req);
+        const container = await getContainerOr404(domain.containerId, req);
         await store.deleteDomain(domain.id);
         await deps.publisher.remove([domain.hostname]);
+        if (domain.status === 'verified' && container.status !== 'deleting')
+          await deps.queue.enqueue({ type: 'apply', containerId: container.id });
         return reply.code(204).send();
       });
     },
@@ -1079,10 +1084,15 @@ export function buildApi(deps: ApiDeps): { app: FastifyInstance; internal: Fasti
       return routeFor(container, domain);
     });
 
-    /** Full container record for the provisioner, including the Container Config. */
-    authed.get<{ Params: { id: string } }>('/internal/containers/:id', async (req) =>
-      getContainerOr404(req.params.id),
-    );
+    /** Full container record for the provisioner, including the Container Config and verified domains. */
+    authed.get<{ Params: { id: string } }>('/internal/containers/:id', async (req) => {
+      const container = await getContainerOr404(req.params.id);
+      const domains = await store.listDomains(container.id);
+      return {
+        ...container,
+        domains: domains.filter((d) => d.status === 'verified').map((d) => d.hostname),
+      };
+    });
 
     /** The provisioner reports progress here. */
     authed.post<{ Params: { id: string } }>('/internal/containers/:id/status', async (req) => {

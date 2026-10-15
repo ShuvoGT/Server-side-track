@@ -304,8 +304,10 @@ OpenTrack runs on Openship (`deploy.ibos.io`), server **ibos-34** (`103.197.205.
 `server-side-tracking`, from `deploy/openship/docker-compose.yml`, with the dashboard at https://sst.ibos.agency.
 Email goes through Google Workspace SMTP (an App Password); Google sign-in uses an OAuth client whose redirect URI
 is `https://sst.ibos.agency/api/auth/google/callback`. ibos-34 is shared with other teams' apps, so
-nothing gets the host's Docker socket: the provisioner runs with `DRIVER=external`, and each website's Google
-tagging and preview servers are services of the project.
+nothing gets the host's Docker socket: the provisioner runs with `DRIVER=openship` and, through Openship's API,
+creates each website's Google tagging and preview servers as services of the project, plus one small nginx proxy
+service per tracking domain (Openship keeps one custom domain per service port, and the gateway already has
+`ss.travilo.io`).
 
 | Public name                   | Openship routes to               | Purpose                                                      |
 | ----------------------------- | -------------------------------- | ------------------------------------------------------------ |
@@ -313,28 +315,30 @@ tagging and preview servers are services of the project.
 | `ss.travilo.io`               | `gateway:8080`                   | Tracking domain of travilo.io                                |
 | `travilo-preview.ibos.agency` | `sst-chukjbhcigtx2-preview:8080` | GTM server Preview for travilo.io                            |
 | `pgadmin.ibos.agency`         | `pgadmin:80`                     | pgAdmin for the live PostgreSQL (login: Openship variables)  |
+| `<id>.preview.ibos.agency`    | `sst-<id>-preview:8080`          | GTM server Preview of each newer container (wildcard DNS)    |
+| any other tracking domain     | `sst-<id>-edge-<host>:8080`      | nginx proxy to `gateway:8080`, created by the provisioner    |
 
 Secrets (`ADMIN_API_KEY`, `INTERNAL_API_TOKEN`, `SESSION_SECRET`, `GOOGLE_CLIENT_ID`/`_SECRET`, `SUPER_ADMIN_EMAILS`, `SMTP_URL`, `MAIL_FROM`, `SECRETS_KEY`, `POSTGRES_PASSWORD`,
-`DATABASE_URL`) and `EDGE_HOSTNAME` / `EDGE_IPV4` are Openship project variables; each tagging service's `CONTAINER_CONFIG` is a service variable. None
-are in the repository. Deploys are folder uploads with the compose file at the archive root (build contexts
+`DATABASE_URL`, `OPENSHIP_TOKEN`) and `EDGE_HOSTNAME` / `EDGE_IPV4` are Openship project variables; the provisioner
+copies each container's `CONTAINER_CONFIG` from the database into its services. None are in the repository. The
+services the provisioner creates are not in the compose file, so a platform deploy must send only the services it
+changes. Deploys are folder uploads with the compose file at the archive root (build contexts
 rewritten from `../..` to `.`); redeploy only the services that changed (usually `api` and `dashboard`), never
 `redis` or `postgres`. A dashboard tab opened before a deploy shows "The dashboard was updated" on its next action;
 reloading fixes it.
 
 ### Adding a website
 
-1. Dashboard: **New container** with the GTM server container's Container Config; note the container id.
-2. Compose: add `sst-<id>-tagging` and `sst-<id>-preview` (copy the Travilo pair), deploy, and set
-   `CONTAINER_CONFIG` on both as a service variable.
-3. Cloudflare (DNS only, grey cloud): `ss.<site>` CNAME `sst.ibos.agency`, and `<site>-preview.ibos.agency`
-   CNAME `sst.ibos.agency`.
-4. Openship: custom domain `ss.<site>` on `gateway` (8080), `<site>-preview.ibos.agency` on the preview service
-   (8080); set `PREVIEW_SERVER_URL=https://<site>-preview.ibos.agency` on the tagging service.
-5. Dashboard: add and verify the domain, set the web container id in Power-ups.
-6. GTM server container: Web Container client allows the web container id (with "Automatically serve all
+1. Dashboard: **New container** with the GTM server container's Container Config. The provisioner creates
+   `sst-<id>-tagging` and `sst-<id>-preview` in Openship and deploys them; the container turns Active.
+2. Dashboard: add the tracking domain (`ss.<site>`); at the site's DNS (Cloudflare: DNS only, grey cloud) add
+   `ss` CNAME `sst.ibos.agency`; press **Verify**. The provisioner then creates the domain's proxy service, and
+   Openship issues its certificate.
+3. Dashboard: set the web container id in Power-ups. GTM Preview works at `https://<id>.preview.ibos.agency`.
+4. GTM server container: Web Container client allows the web container id (with "Automatically serve all
    dependent Google scripts"), GA4 client, GA4 tag; publish. Web container: `server_container_url` on the Google
    tag; publish.
-7. Website: replace the GTM snippet with the dashboard's, remove every other Google tag on the page (plugins such
+5. Website: replace the GTM snippet with the dashboard's, remove every other Google tag on the page (plugins such
    as Site Kit or GTM4WP), purge every cache, and check in a browser that `/g/collect` goes to `ss.<site>`.
 
 ### Lessons from the first website (travilo.io)
