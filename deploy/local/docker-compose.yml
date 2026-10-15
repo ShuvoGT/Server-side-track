@@ -1,4 +1,4 @@
-# Local stack: Redis, the control plane API (SQLite), the edge gateway, the dashboard, Caddy and the
+# Local stack: Redis, PostgreSQL, the control plane API, the edge gateway, the dashboard, Caddy and the
 # provisioner. The provisioner starts Google's tagging and preview servers as Docker containers
 # (sst-<id>-tagging, sst-<id>-preview) for every container created in the dashboard.
 #
@@ -15,11 +15,26 @@ services:
       interval: 5s
       retries: 10
 
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: sst
+      POSTGRES_DB: sst
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sst-local}
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ['CMD', 'pg_isready', '-U', 'sst', '-d', 'sst']
+      interval: 5s
+      retries: 10
+
   api:
     build: { context: ../.., args: { APP: api } }
     environment:
-      # SQLite file on a volume; the API applies migrations itself at startup.
-      DATABASE_URL: file:/app/data/sst.db
+      # The API applies migrations itself at startup.
+      DATABASE_URL: postgresql://sst:${POSTGRES_PASSWORD:-sst-local}@postgres:5432/sst
+      # Installs from before PostgreSQL: the API copies this SQLite file once into the empty database at
+      # startup (opened read-only, left as it is). Remove the volume once PostgreSQL has the data.
+      SQLITE_IMPORT_FILE: /app/data/sst.db
       REDIS_URL: redis://redis:6379
       ADMIN_API_KEY: ${ADMIN_API_KEY}
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
@@ -30,6 +45,7 @@ services:
     volumes: [apidata:/app/data]
     ports: ['3000:3000']
     depends_on:
+      postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
 
   gateway:
@@ -81,5 +97,6 @@ services:
       api: { condition: service_started }
 
 volumes:
+  pgdata:
   apidata:
   caddy:

@@ -19,10 +19,15 @@ const configSchema = z.object({
   /** Internal API for Caddy (ask endpoint), the gateway and the provisioner. Not exposed outside the cluster. */
   INTERNAL_PORT: z.coerce.number().int().default(3001),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
-  /** prisma: SQLite through Prisma. memory: in-process store for tests; data is lost on restart. */
+  /** prisma: PostgreSQL through Prisma. memory: in-process store for tests; data is lost on restart. */
   STORE: z.enum(['prisma', 'memory']).default('prisma'),
-  /** SQLite file. A relative path is resolved from the prisma/ folder, so the default is apps/api/data/sst.db. */
-  DATABASE_URL: z.string().default('file:../data/sst.db'),
+  /** PostgreSQL connection string, e.g. postgresql://sst:PASSWORD@postgres:5432/sst */
+  DATABASE_URL: z.string().default('postgresql://sst:sst@127.0.0.1:5432/sst'),
+  /**
+   * The SQLite file of a platform that ran before PostgreSQL. When set and the PostgreSQL database is empty, its
+   * data is copied over once at startup.
+   */
+  SQLITE_IMPORT_FILE: optionalString,
   REDIS_URL: optionalString,
   ADMIN_API_KEY: z.string().min(24),
   INTERNAL_API_TOKEN: z.string().min(16),

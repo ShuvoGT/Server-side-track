@@ -51,6 +51,8 @@ else
   echo ".env exists: keeping its secrets."
   NEW_PASSWORD=
 fi
+# Installs from before PostgreSQL have an .env without it.
+grep -q '^POSTGRES_PASSWORD=' .env || set_var POSTGRES_PASSWORD "$(openssl rand -hex 24)"
 set_var EDGE_HOSTNAME "$EDGE_HOSTNAME"
 set_var DASHBOARD_HOST "$DASHBOARD_HOST"
 set_var ACME_EMAIL "$ACME_EMAIL"

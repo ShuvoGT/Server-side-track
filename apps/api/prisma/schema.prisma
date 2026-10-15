@@ -1,5 +1,4 @@
-// Control plane configuration. SQLite is the source of truth; Redis only caches routes for the gateway.
-// SQLite means one API instance writing the file: run a single replica with the file on a persistent volume.
+// Control plane configuration. PostgreSQL is the source of truth; Redis only caches routes for the gateway.
 // Change this file only together with a migration: pnpm --filter @sst/api prisma:migrate --name <change>
 
 generator client {
@@ -7,7 +6,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 

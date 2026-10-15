@@ -1,6 +1,7 @@
 import { Prisma, PrismaClient } from '@prisma/client';
 import { powerUpsSchema } from '@sst/shared';
 import type { Container, Domain, UsageCounts } from './model.js';
+import { importFromSqlite } from './sqliteImport.js';
 import { DuplicateHostnameError, type ContainerPatch, type DomainPatch, type Store } from './store.js';
 
 type ContainerRow = Prisma.ContainerGetPayload<object>;
@@ -20,10 +21,9 @@ export class PrismaStore implements Store {
     this.db = new PrismaClient({ datasourceUrl: databaseUrl });
   }
 
-  /** WAL lets readers continue while the single writer commits; busy_timeout waits instead of failing on a lock. */
-  async init() {
-    await this.db.$queryRawUnsafe('PRAGMA journal_mode = WAL');
-    await this.db.$queryRawUnsafe('PRAGMA busy_timeout = 5000');
+  /** Copies the data of the earlier SQLite database once, into an empty PostgreSQL database. */
+  importFromSqlite(file: string) {
+    return importFromSqlite(this.db, file);
   }
 
   async ping() {

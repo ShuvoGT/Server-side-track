@@ -18,10 +18,11 @@ import type { Store } from './store.js';
 async function main() {
   const config = loadConfig();
   let store: Store = new MemoryStore();
+  let imported: Awaited<ReturnType<PrismaStore['importFromSqlite']>> = null;
   if (config.STORE === 'prisma') {
     await migrateDatabase(config.DATABASE_URL);
     const prismaStore = new PrismaStore(config.DATABASE_URL);
-    await prismaStore.init();
+    if (config.SQLITE_IMPORT_FILE) imported = await prismaStore.importFromSqlite(config.SQLITE_IMPORT_FILE);
     store = prismaStore;
   }
   const redis = config.REDIS_URL ? new Redis(config.REDIS_URL, { maxRetriesPerRequest: 2 }) : null;
@@ -47,6 +48,8 @@ async function main() {
   const logger = app.log;
   if (!redis) logger.warn('no REDIS_URL: routes are served to the gateway from the internal API only');
   if (config.STORE === 'memory') logger.warn('STORE=memory: configuration is lost on restart');
+  if (imported)
+    logger.info(imported, `copied the SQLite database ${config.SQLITE_IMPORT_FILE} into PostgreSQL`);
   redis?.on('error', (err) => logger.warn({ err }, 'redis error'));
 
   const timers: NodeJS.Timeout[] = [];

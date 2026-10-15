@@ -10,7 +10,7 @@ used unchanged; everything here runs in front of it or around it.
 
 ```
 apps/gateway/        edge gateway (Fastify + undici): routing, custom loader, power-ups, webhooks, counters
-apps/api/            control plane API (Fastify + Prisma + SQLite): tenants, containers, domains, Caddy ask,
+apps/api/            control plane API (Fastify + Prisma + PostgreSQL): tenants, containers, domains, Caddy ask,
                      usage, request logs
 apps/dashboard/      dashboard (Next.js): onboarding, domains, power-ups, usage, logs, settings
 packages/shared/     route schema, power-up logic, loader paths, webhook signing (shared by both apps)
@@ -33,7 +33,7 @@ browser ──TLS──▶ Caddy ──▶ gateway ──▶ tagging server (Goo
        get a cert?▼          ▼
                API ◀──── Redis (routes, invalidation pub/sub, counters, request logs, provisioning queue)
               ▲  │
-   dashboard ─┘  SQLite (source of truth)
+   dashboard ─┘  PostgreSQL (source of truth)
 ```
 
 The gateway, for each request to a customer's tracking host (e.g. `sst.shop.com`):
@@ -117,16 +117,21 @@ and its tags call `www.google-analytics.com` and other vendor domains. Networks 
 tag domains to 0.0.0.0". Allow at least `googletagmanager.com`, `google-analytics.com`, `googleadservices.com`,
 `graph.facebook.com` and `business-api.tiktok.com` for the servers that run tagging servers.
 
-### Database: SQLite
+### Database: PostgreSQL
 
-The API keeps its configuration in one SQLite file (default `apps/api/data/sst.db`, set with `DATABASE_URL`, e.g.
-`file:/app/data/sst.db`) and applies Prisma migrations itself at startup. SQLite allows one writer, so run **one
-API replica** with the file on a persistent, backed-up volume. The guide's design used PostgreSQL; moving to it
-later means changing the Prisma `provider` and generating a new migration, nothing else.
+The API keeps its configuration in PostgreSQL (`DATABASE_URL`, e.g. `postgresql://sst:PASSWORD@postgres:5432/sst`)
+and applies Prisma migrations itself at startup. Every deployment in `deploy/` runs a `postgres:17-alpine` service
+with its data on the `pgdata` volume; any other PostgreSQL 13+ works too.
+
+Earlier versions kept everything in a SQLite file. With `SQLITE_IMPORT_FILE` set (the deployments set it to
+`/app/data/sst.db` on the old volume), the API copies that file into PostgreSQL once, when the
+database is still empty, keeping every id. The file is left untouched; remove the `apidata` volume and the variable
+once the data is confirmed in PostgreSQL.
 
 ### Without Docker (development)
 
-Needs a Redis on `localhost:6379` (`docker run -d -p 6379:6379 redis:7-alpine`). Copy each `deploy/dev/*.env.example` to `*.env` and replace `CHANGE_ME` with your own values (the same
+Needs a Redis on `localhost:6379` (`docker run -d -p 6379:6379 redis:7-alpine`) and a PostgreSQL (the
+`docker run` line is in `deploy/dev/api.env.example`). Copy each `deploy/dev/*.env.example` to `*.env` and replace `CHANGE_ME` with your own values (the same
 `INTERNAL_API_TOKEN` in all three; `ADMIN_API_KEY` at least 24 characters). Build once (`pnpm build`), then:
 
 ```bash
@@ -195,7 +200,7 @@ The gateway serves `/healthz`, `/readyz` and `/metrics` on its admin port (9090)
 
 | Guide chapter                                            | Status                                                                                                                                                                                                                                                                                                  |
 | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Foundations, Architecture                                | Followed: data plane / control plane split, gateway keeps working without the API, SQLite (by decision, instead of PostgreSQL) + Redis, Caddy on-demand TLS with an ask endpoint, per-container namespaces, health/metrics endpoints, zod-validated config, Prisma migrations.                          |
+| Foundations, Architecture                                | Followed: data plane / control plane split, gateway keeps working without the API, PostgreSQL + Redis, Caddy on-demand TLS with an ask endpoint, per-container namespaces, health/metrics endpoints, zod-validated config, Prisma migrations.                                                           |
 | Data plane: tagging runtime                              | Done: the provisioner runs Google's image per container. Kubernetes: `ctr-<id>` namespace, 2 tagging replicas at 0.25/1 vCPU, one preview server, `/healthy` probes, PDB, NetworkPolicy (`deploy/k8s/container-template.yaml` documents the same objects). Docker: one tagging + one preview container. |
 | Data plane: edge gateway and custom loader               | Done (`apps/gateway`).                                                                                                                                                                                                                                                                                  |
 | Data plane: custom domains and SSL                       | Subdomain + CNAME/A verification + on-demand certificates done. Same-origin path setup (Nginx/Cloudflare snippets) not yet written.                                                                                                                                                                     |
@@ -219,11 +224,12 @@ tagging and preview servers are services of the project.
 | `sst.ibos.agency`             | `dashboard:3100`                 | Dashboard; also the CNAME target (edge) for tracking domains |
 | `ss.travilo.io`               | `gateway:8080`                   | Tracking domain of travilo.io                                |
 | `travilo-preview.ibos.agency` | `sst-chukjbhcigtx2-preview:8080` | GTM server Preview for travilo.io                            |
+| `pgadmin.ibos.agency`         | `pgadmin:80`                     | pgAdmin for the live PostgreSQL (login: Openship variables)  |
 
-Secrets (`ADMIN_API_KEY`, `INTERNAL_API_TOKEN`, `DASHBOARD_PASSWORD`, `SESSION_SECRET`) and `EDGE_HOSTNAME` /
-`EDGE_IPV4` are Openship project variables; each tagging service's `CONTAINER_CONFIG` is a service variable. None
+Secrets (`ADMIN_API_KEY`, `INTERNAL_API_TOKEN`, `DASHBOARD_PASSWORD`, `SESSION_SECRET`, `POSTGRES_PASSWORD`,
+`DATABASE_URL`) and `EDGE_HOSTNAME` / `EDGE_IPV4` are Openship project variables; each tagging service's `CONTAINER_CONFIG` is a service variable. None
 are in the repository. Deploys are folder uploads with the compose file at the archive root (build contexts
-rewritten from `../..` to `.`); redeploy only the services that changed, never `redis`.
+rewritten from `../..` to `.`); redeploy only the services that changed, never `redis` or `postgres`.
 
 ### Adding a website
 

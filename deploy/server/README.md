@@ -61,5 +61,5 @@ docker compose logs provisioner | tail    # provisioning progress and errors
 ./setup.sh <same arguments>               # update after git pull
 ```
 
-Back up the Docker volumes `sst_apidata` (SQLite: all configuration) and `sst_caddy` (certificates) daily, and
-`deploy/server/.env`. Request logs and counters in `sst_redis` can be lost without harm.
+Back up PostgreSQL (all configuration) and the `sst_caddy` volume (certificates) daily, and `deploy/server/.env`:
+`docker compose exec -T postgres pg_dump -U sst sst > sst-$(date +%F).sql`. Request logs and counters in `sst_redis` can be lost without harm.

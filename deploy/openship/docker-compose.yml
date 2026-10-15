@@ -10,10 +10,11 @@
 # - Each tracking domain (e.g. ss.travilo.io) is a custom domain on the gateway service in Openship, which issues
 #   its certificate. On a dedicated server, deploy/server does all of this automatically.
 #
-# Secrets (ADMIN_API_KEY, INTERNAL_API_TOKEN, DASHBOARD_PASSWORD, SESSION_SECRET, EDGE_HOSTNAME) are project
-# environment variables in Openship, and each tagging service's CONTAINER_CONFIG is a service variable; none are
-# in this file. They are deliberately not listed below: a `${VAR}` entry here is saved by Openship as an empty
-# service value that overrides the project variable.
+# Secrets (ADMIN_API_KEY, INTERNAL_API_TOKEN, DASHBOARD_PASSWORD, SESSION_SECRET, EDGE_HOSTNAME, POSTGRES_PASSWORD
+# and DATABASE_URL=postgresql://sst:<POSTGRES_PASSWORD>@postgres:5432/sst) are project environment variables in
+# Openship, and each tagging service's CONTAINER_CONFIG is a service variable; none are in this file. They are
+# deliberately not listed below: a `${VAR}` entry here is saved by Openship as an empty service value that
+# overrides the project variable.
 #
 # The upload puts this file at the archive root, with every build context rewritten from ../.. to "."
 # (Openship's scan only detects a compose file at the root).
@@ -34,16 +35,31 @@ services:
       interval: 5s
       retries: 10
 
+  postgres:
+    <<: *restart
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: sst
+      POSTGRES_DB: sst
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ['CMD', 'pg_isready', '-U', 'sst', '-d', 'sst']
+      interval: 5s
+      retries: 10
+
   api:
     <<: *restart
     build: { context: ../.., args: { APP: api } }
     environment:
-      DATABASE_URL: file:/app/data/sst.db
+      # Installs from before PostgreSQL: the API copies this SQLite file once into the empty database at
+      # startup (opened read-only, left as it is). Remove the volume once PostgreSQL has the data.
+      SQLITE_IMPORT_FILE: /app/data/sst.db
       REDIS_URL: redis://redis:6379
       TAGGING_UPSTREAM_TEMPLATE: http://sst-{id}-tagging:8080
     expose: ['3000']
     volumes: [apidata:/app/data]
     depends_on:
+      postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
 
   gateway:
@@ -95,6 +111,20 @@ services:
       RUN_AS_PREVIEW_SERVER: 'true'
     expose: ['8080']
 
+  # Web UI for the database at https://pgadmin.ibos.agency (Openship custom domain on port 80). The login email
+  # (PGADMIN_DEFAULT_EMAIL) is a service variable and PGADMIN_DEFAULT_PASSWORD a project variable; Openship also
+  # mounts /pgadmin4/servers.json, which adds the "SST (live)" server (host postgres, user sst) on first start.
+  pgadmin:
+    <<: *restart
+    image: dpage/pgadmin4:9
+    environment:
+      PGADMIN_DISABLE_POSTFIX: 'true'
+    expose: ['80']
+    volumes: [pgadmin:/var/lib/pgadmin]
+    depends_on: [postgres]
+
 volumes:
   redis:
+  pgdata:
+  pgadmin:
   apidata:
