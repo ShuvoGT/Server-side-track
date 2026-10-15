@@ -28,9 +28,7 @@ export type ContainerPatch = Partial<
 >;
 export type DomainPatch = Partial<Pick<Domain, 'status' | 'verifiedAt' | 'lastCheckedAt' | 'lastError'>>;
 
-export type UserPatch = Partial<
-  Pick<User, 'name' | 'passwordHash' | 'googleSub' | 'emailVerified' | 'lastLoginAt' | 'passwordChangedAt'>
->;
+export type UserPatch = Partial<Omit<User, 'id' | 'email' | 'createdAt'>>;
 
 export class DuplicateHostnameError extends Error {}
 export class DuplicateEmailError extends Error {}
@@ -43,6 +41,8 @@ export interface Store {
   getTenant(id: string): Promise<Tenant | null>;
   listTenants(): Promise<Tenant[]>;
   renameTenant(id: string, name: string): Promise<Tenant>;
+  /** Removes the workspace with its memberships and invites; callers make sure it has no containers. */
+  deleteTenant(id: string): Promise<void>;
   /** Workspaces nobody belongs to, e.g. created before user accounts existed. */
   listTenantsWithoutMembers(): Promise<Tenant[]>;
 
@@ -51,7 +51,13 @@ export interface Store {
   getUser(id: string): Promise<User | null>;
   getUserByEmail(email: string): Promise<User | null>;
   getUserByGoogleSub(sub: string): Promise<User | null>;
+  /** Every account, newest first (super-admin view). */
+  listUsers(): Promise<User[]>;
+  /** Every membership of every workspace (super-admin view). */
+  listAllMemberships(): Promise<Membership[]>;
   updateUser(id: string, patch: UserPatch): Promise<User>;
+  /** Removes the account with its memberships and reset links. */
+  deleteUser(id: string): Promise<void>;
 
   /** Adds the membership, or changes the role of an existing one. */
   putMembership(membership: Membership): Promise<void>;

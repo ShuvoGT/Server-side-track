@@ -50,6 +50,8 @@ async function main() {
       ? smtpMailer(config.SMTP_URL, config.MAIL_FROM ?? 'no-reply@localhost')
       : undefined,
     dashboardUrl: config.DASHBOARD_URL,
+    secretsKey: config.SECRETS_KEY,
+    requireApproval: config.REQUIRE_APPROVAL,
   });
   const logger = app.log;
   if (!redis) logger.warn('no REDIS_URL: routes are served to the gateway from the internal API only');

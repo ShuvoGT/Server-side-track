@@ -1,6 +1,6 @@
-# Server-side tracking platform
+# OpenTrack
 
-Managed hosting for Google's server-side Tag Manager (sGTM) tagging server, built to the
+A server-side tracking platform: managed hosting for Google's server-side Tag Manager (sGTM) tagging server, built to the
 _Server-Side Tracking Platform: Development Guide_ (v0.2, October 2026,
 `Server-Side Tracking Platform_ Development Guide.docx`).
 
@@ -132,6 +132,11 @@ workspaces (other workspaces' containers answer 404). Requests with the admin ke
 - `SUPER_ADMIN_EMAILS` (API, comma-separated) see every workspace. On their first Google sign-in they become
   owners of workspaces that have no members, such as those created before accounts existed.
 - Passwords are scrypt hashes; ten failed sign-ins for an address or client block it for 15 minutes.
+- **Settings** (profile, preferences, security): name and phone; currency and time zone (every date in the
+  dashboard uses it); password change, which signs out every other device; and two-step verification with an
+  authenticator app (TOTP, RFC 6238) plus ten single-use recovery codes. With it on, both password and Google
+  sign-ins ask for a code. Authenticator keys are stored encrypted (AES-256-GCM) with `SECRETS_KEY`, or a key
+  derived from `ADMIN_API_KEY` when it is unset; changing that key means setting up two-step verification again.
 - **Forgot password?** emails a link that works once, for an hour (only its SHA-256 is stored). Setting the new
   password proves the address and signs the account out everywhere else. Needs `SMTP_URL` (e.g.
   `smtps://user:password@smtp.example.com:465`), `MAIL_FROM` and `DASHBOARD_URL` on the API; without them the
@@ -248,7 +253,7 @@ tagging and preview servers are services of the project.
 | `travilo-preview.ibos.agency` | `sst-chukjbhcigtx2-preview:8080` | GTM server Preview for travilo.io                            |
 | `pgadmin.ibos.agency`         | `pgadmin:80`                     | pgAdmin for the live PostgreSQL (login: Openship variables)  |
 
-Secrets (`ADMIN_API_KEY`, `INTERNAL_API_TOKEN`, `SESSION_SECRET`, `GOOGLE_CLIENT_ID`/`_SECRET`, `SUPER_ADMIN_EMAILS`, `SMTP_URL`, `MAIL_FROM`, `POSTGRES_PASSWORD`,
+Secrets (`ADMIN_API_KEY`, `INTERNAL_API_TOKEN`, `SESSION_SECRET`, `GOOGLE_CLIENT_ID`/`_SECRET`, `SUPER_ADMIN_EMAILS`, `SMTP_URL`, `MAIL_FROM`, `SECRETS_KEY`, `POSTGRES_PASSWORD`,
 `DATABASE_URL`) and `EDGE_HOSTNAME` / `EDGE_IPV4` are Openship project variables; each tagging service's `CONTAINER_CONFIG` is a service variable. None
 are in the repository. Deploys are folder uploads with the compose file at the archive root (build contexts
 rewritten from `../..` to `.`); redeploy only the services that changed, never `redis` or `postgres`.

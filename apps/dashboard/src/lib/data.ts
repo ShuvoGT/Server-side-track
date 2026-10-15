@@ -19,7 +19,9 @@ export const getMe = cache(async () => {
   // Pages render alongside the layout, so each checks the session itself (e.g. a cookie from an older version).
   await requireSession();
   try {
-    return await api.me();
+    const me = await api.me();
+    if (me.user.status !== 'active') redirect('/pending');
+    return me;
   } catch (error) {
     if (error instanceof ApiError && (error.status === 401 || error.code === 'no_user')) redirect('/logout');
     throw error;

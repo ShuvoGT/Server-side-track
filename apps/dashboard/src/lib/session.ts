@@ -59,6 +59,7 @@ export async function destroySession(): Promise<void> {
   const jar = await cookies();
   jar.delete(COOKIE);
   jar.delete(WORKSPACE_COOKIE);
+  jar.delete('sst_2fa');
 }
 
 export async function getSession(): Promise<Session | null> {
@@ -73,6 +74,26 @@ export async function requireSession(): Promise<Session> {
   const session = await getSession();
   if (!session) redirect('/login');
   return session;
+}
+
+const PENDING_COOKIE = 'sst_2fa';
+
+/** A sign-in whose password or Google step passed, waiting for the two-step code (five minutes). */
+export async function startPendingSignIn(userId: string, next: string): Promise<void> {
+  const expires = Math.floor(Date.now() / 1000) + 300;
+  const payload = `2fa.${userId}.${expires}.${Buffer.from(next).toString('base64url')}`;
+  (await cookies()).set(PENDING_COOKIE, sealed(payload), cookieOptions(300));
+}
+
+export async function getPendingSignIn(): Promise<{ userId: string; next: string } | null> {
+  const payload = unseal((await cookies()).get(PENDING_COOKIE)?.value);
+  const [kind, userId, expires, next] = payload?.split('.') ?? [];
+  if (kind !== '2fa' || !userId || !(Number(expires) > Date.now() / 1000)) return null;
+  return { userId, next: Buffer.from(next ?? '', 'base64url').toString('utf8') || '/' };
+}
+
+export async function clearPendingSignIn(): Promise<void> {
+  (await cookies()).delete(PENDING_COOKIE);
 }
 
 /** The workspace picked in the sidebar. Only a preference: the API checks membership on every request. */

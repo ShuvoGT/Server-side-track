@@ -11,6 +11,7 @@ export interface Tenant {
 }
 
 export type Role = 'owner' | 'member';
+export type UserStatus = 'pending' | 'active' | 'rejected';
 
 export interface User {
   id: string;
@@ -25,7 +26,36 @@ export interface User {
   lastLoginAt: Date | null;
   /** Sessions signed in before this are no longer accepted. */
   passwordChangedAt: Date | null;
+  /** Pending accounts wait for a super-admin; only active ones may use the dashboard. */
+  status: UserStatus;
+  approvedAt: Date | null;
+  /** ISO 3166 country of the phone number, e.g. BD. */
+  phoneCountry: string | null;
+  phone: string | null;
+  /** ISO 4217, for showing revenue. */
+  currency: string;
+  /** IANA time zone for dates and times in the dashboard. */
+  timezone: string;
+  /** Encrypted authenticator key; set up but not yet on while totpEnabledAt is null. */
+  totpSecret: string | null;
+  totpEnabledAt: Date | null;
+  totpLastStep: number | null;
+  /** SHA-256 of the unused recovery codes. */
+  recoveryCodeHashes: string[];
 }
+
+/** Defaults for a new account's settings. */
+export const newUserSettings = () => ({
+  approvedAt: null,
+  phoneCountry: null,
+  phone: null,
+  currency: 'BDT',
+  timezone: 'Asia/Dhaka',
+  totpSecret: null,
+  totpEnabledAt: null,
+  totpLastStep: null,
+  recoveryCodeHashes: [] as string[],
+});
 
 export interface PasswordReset {
   id: string;
@@ -139,7 +169,15 @@ export function userView(user: User, superAdmin: boolean) {
     hasPassword: user.passwordHash !== null,
     hasGoogle: user.googleSub !== null,
     superAdmin,
+    status: user.status,
     createdAt: user.createdAt,
+    phoneCountry: user.phoneCountry,
+    phone: user.phone,
+    currency: user.currency,
+    timezone: user.timezone,
+    twoFactorEnabled: user.totpEnabledAt !== null,
+    twoFactorEnabledAt: user.totpEnabledAt,
+    recoveryCodesLeft: user.totpEnabledAt ? user.recoveryCodeHashes.length : 0,
   };
 }
 

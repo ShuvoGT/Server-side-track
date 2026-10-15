@@ -56,6 +56,10 @@ export class PrismaStore implements Store {
   renameTenant(id: string, name: string) {
     return this.db.tenant.update({ where: { id }, data: { name } });
   }
+  async deleteTenant(id: string) {
+    // Memberships and invites go with it (onDelete: Cascade).
+    await this.db.tenant.delete({ where: { id } });
+  }
   listTenantsWithoutMembers() {
     return this.db.tenant.findMany({ where: { memberships: { none: {} } }, orderBy: { createdAt: 'asc' } });
   }
@@ -76,6 +80,16 @@ export class PrismaStore implements Store {
   }
   getUserByGoogleSub(sub: string) {
     return this.db.user.findUnique({ where: { googleSub: sub } });
+  }
+  listUsers() {
+    return this.db.user.findMany({ orderBy: { createdAt: 'desc' } });
+  }
+  async deleteUser(id: string) {
+    // Memberships and password reset links go with it (onDelete: Cascade).
+    await this.db.user.delete({ where: { id } });
+  }
+  listAllMemberships() {
+    return this.db.membership.findMany();
   }
   updateUser(id: string, patch: UserPatch) {
     return this.db.user.update({ where: { id }, data: patch });

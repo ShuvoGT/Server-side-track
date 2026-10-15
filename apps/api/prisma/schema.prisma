@@ -22,21 +22,37 @@ model Tenant {
 
 /// A person who signs in to the dashboard, with a password, Google, or both.
 model User {
-  id                String          @id
+  id                 String          @id
   /// Lower-case.
-  email             String          @unique
-  name              String
+  email              String          @unique
+  name               String
   /// scrypt hash; null for Google-only accounts.
-  passwordHash      String?
-  googleSub         String?         @unique
+  passwordHash       String?
+  googleSub          String?         @unique
   /// True once Google confirmed the address. Invites and super-admin rights need a verified address.
-  emailVerified     Boolean         @default(false)
-  createdAt         DateTime        @default(now())
-  lastLoginAt       DateTime?
+  emailVerified      Boolean         @default(false)
+  createdAt          DateTime        @default(now())
+  lastLoginAt        DateTime?
   /// Sessions signed in before this are no longer accepted.
-  passwordChangedAt DateTime?
-  memberships       Membership[]
-  passwordResets    PasswordReset[]
+  passwordChangedAt  DateTime?
+  status             UserStatus      @default(pending)
+  approvedAt         DateTime?
+  /// ISO 3166 country of the phone number, e.g. BD.
+  phoneCountry       String?
+  phone              String?
+  /// ISO 4217, for showing revenue.
+  currency           String          @default("BDT")
+  /// IANA time zone for dates and times in the dashboard.
+  timezone           String          @default("Asia/Dhaka")
+  /// Two-step verification: the authenticator key (encrypted), set up but not yet on while totpEnabledAt is null.
+  totpSecret         String?
+  totpEnabledAt      DateTime?
+  /// The last time step used, so a code cannot be used twice.
+  totpLastStep       Int?
+  /// SHA-256 of the unused recovery codes.
+  recoveryCodeHashes String[]        @default([])
+  memberships        Membership[]
+  passwordResets     PasswordReset[]
 }
 
 /// A password reset link sent by email. Only the token's SHA-256 is stored; each link works once, for an hour.
@@ -50,6 +66,13 @@ model PasswordReset {
   createdAt DateTime  @default(now())
 
   @@index([userId])
+}
+
+/// New accounts wait for a super-admin's approval before they can use the dashboard.
+enum UserStatus {
+  pending
+  active
+  rejected
 }
 
 enum Role {

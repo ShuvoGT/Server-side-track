@@ -14,6 +14,7 @@ const ERRORS: Record<string, string> = {
   google_unverified: 'Google has not verified that email address, so it cannot be used to sign in.',
   google_failed: 'Google sign-in did not work. Try again, or sign in with your password.',
   google_off: 'Google sign-in is not set up on this server.',
+  two_factor_expired: 'The two-step verification took too long. Sign in again.',
 };
 
 export default async function LoginPage({

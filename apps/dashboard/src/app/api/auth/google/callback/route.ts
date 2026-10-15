@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { api, ApiError } from '@/lib/api';
 import { env } from '@/lib/env';
 import { exchangeCode, OAUTH_COOKIE } from '@/lib/google';
-import { createSession, selectWorkspace, unseal } from '@/lib/session';
+import { createSession, selectWorkspace, startPendingSignIn, unseal } from '@/lib/session';
 
 export const dynamic = 'force-dynamic';
 
@@ -34,7 +34,18 @@ export async function GET(request: NextRequest) {
   try {
     const identity = await exchangeCode(code, verifier);
     const me = await api.signInWithGoogle(identity);
+    if (me.user.twoFactorEnabled) {
+      await startPendingSignIn(me.user.id, safeNext(next));
+      const response = NextResponse.redirect(new URL('/login/verify', env().DASHBOARD_URL));
+      response.cookies.delete(OAUTH_COOKIE);
+      return response;
+    }
     await createSession(me.user.id);
+    if (me.user.status !== 'active') {
+      const response = NextResponse.redirect(new URL('/pending', env().DASHBOARD_URL));
+      response.cookies.delete(OAUTH_COOKIE);
+      return response;
+    }
     const own = me.workspaces.find((w) => w.role === 'owner') ?? me.workspaces[0];
     if (own) await selectWorkspace(own.id);
   } catch (error) {

@@ -19,9 +19,9 @@ export function AuthCard({
       <div className="card auth-card">
         <div className="card-body stack">
           <div className="brand" style={{ padding: 0 }}>
-            <span className="brand-mark">S</span>
+            <span className="brand-mark">O</span>
             <div>
-              Tracking Platform
+              OpenTrack
               <small>Server-side tagging</small>
             </div>
           </div>

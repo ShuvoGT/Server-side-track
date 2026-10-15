@@ -52,6 +52,11 @@ export class MemoryStore implements Store {
     this.tenants.set(id, next);
     return next;
   }
+  async deleteTenant(id: string) {
+    this.tenants.delete(id);
+    for (const [key, m] of this.memberships) if (m.tenantId === id) this.memberships.delete(key);
+    for (const [key, i] of this.invites) if (i.tenantId === id) this.invites.delete(key);
+  }
   async listTenantsWithoutMembers() {
     const used = new Set([...this.memberships.values()].map((m) => m.tenantId));
     return [...this.tenants.values()].filter((t) => !used.has(t.id));
@@ -70,6 +75,17 @@ export class MemoryStore implements Store {
   }
   async getUserByGoogleSub(sub: string) {
     return [...this.users.values()].find((u) => u.googleSub === sub) ?? null;
+  }
+  async listUsers() {
+    return [...this.users.values()].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+  async deleteUser(id: string) {
+    this.users.delete(id);
+    for (const [key, m] of this.memberships) if (m.userId === id) this.memberships.delete(key);
+    for (const [key, r] of this.passwordResets) if (r.userId === id) this.passwordResets.delete(key);
+  }
+  async listAllMemberships() {
+    return [...this.memberships.values()];
   }
   async updateUser(id: string, patch: UserPatch) {
     const current = this.users.get(id);

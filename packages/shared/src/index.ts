@@ -8,6 +8,7 @@ export * from './device.js';
 export * from './headers.js';
 export * from './host.js';
 export * from './ip.js';
+export * from './phone.js';
 export * from './loader.js';
 export * from './redisKeys.js';
 export * from './schemas.js';

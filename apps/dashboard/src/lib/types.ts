@@ -26,7 +26,21 @@ export interface User {
   hasPassword: boolean;
   hasGoogle: boolean;
   superAdmin: boolean;
+  /** Pending accounts wait for a super-admin's approval. */
+  status: 'pending' | 'active' | 'rejected';
   createdAt: string;
+  phoneCountry: string | null;
+  phone: string | null;
+  currency: string;
+  timezone: string;
+  twoFactorEnabled: boolean;
+  twoFactorEnabledAt: string | null;
+  recoveryCodesLeft: number;
+}
+
+export interface AdminUser extends User {
+  lastLoginAt: string | null;
+  workspaces: { id: string; name: string; role: Role }[];
 }
 
 export interface Me {

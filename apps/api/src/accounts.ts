@@ -5,7 +5,9 @@ import {
   timingSafeEqual,
   type ScryptOptions,
 } from 'node:crypto';
-import { newId, type User } from './model.js';
+import { newId, newUserSettings, type User } from './model.js';
+import type { SecretBox } from './secretBox.js';
+import { newRecoveryCodes, newTotpSecret, otpauthUrl, verifyTotp } from './totp.js';
 import { DuplicateEmailError, type Store } from './store.js';
 
 const scrypt = (password: string, salt: Buffer, keylen: number, options: ScryptOptions) =>
@@ -64,15 +66,32 @@ export class Accounts {
   constructor(
     private readonly store: Store,
     superAdminEmails: string[],
+    private readonly secrets: SecretBox,
+    private readonly options: {
+      /** New accounts wait for a super-admin's approval (default). */
+      requireApproval?: boolean;
+      /** Told about each new account that waits for approval, e.g. to email the super-admins. */
+      onAccountRequested?: (user: User) => Promise<void>;
+    } = {},
   ) {
     this.superAdmins = new Set(superAdminEmails.map(normalizeEmail));
+  }
+
+  private get newStatus() {
+    return this.options.requireApproval === false ? ('active' as const) : ('pending' as const);
   }
 
   isSuperAdmin(user: User): boolean {
     return user.emailVerified && this.superAdmins.has(user.email);
   }
 
-  async signUp(input: { email: string; password: string; name: string }): Promise<User | 'email_taken'> {
+  async signUp(input: {
+    email: string;
+    password: string;
+    name: string;
+    phoneCountry?: string;
+    phone?: string;
+  }): Promise<User | 'email_taken'> {
     const email = normalizeEmail(input.email);
     if (await this.store.getUserByEmail(email)) return 'email_taken';
     try {
@@ -86,8 +105,12 @@ export class Accounts {
         createdAt: new Date(),
         lastLoginAt: null,
         passwordChangedAt: null,
+        status: this.newStatus,
+        ...newUserSettings(),
+        phoneCountry: input.phone ? (input.phoneCountry ?? null) : null,
+        phone: input.phone ? input.phone.replace(/\s+/g, ' ') : null,
       });
-      return await this.afterSignIn(user);
+      return await this.afterSignIn(user, true);
     } catch (error) {
       if (error instanceof DuplicateEmailError) return 'email_taken';
       throw error;
@@ -108,6 +131,7 @@ export class Accounts {
     if (!profile.emailVerified) return 'email_not_verified';
     const email = normalizeEmail(profile.email);
     let user = await this.store.getUserByGoogleSub(profile.sub);
+    let created = false;
     if (!user) {
       const existing = await this.store.getUserByEmail(email);
       if (existing) {
@@ -130,10 +154,13 @@ export class Accounts {
           createdAt: new Date(),
           lastLoginAt: null,
           passwordChangedAt: null,
+          status: this.newStatus,
+          ...newUserSettings(),
         });
+        created = true;
       }
     }
-    return this.afterSignIn(user);
+    return this.afterSignIn(user, created);
   }
 
   /**
@@ -175,10 +202,15 @@ export class Accounts {
     return this.afterSignIn(user);
   }
 
-  /** Records the sign-in, accepts pending invites, and makes sure the user has a workspace. */
-  private async afterSignIn(user: User): Promise<User> {
+  /**
+   * Records the sign-in and accepts pending invites. A pending account is approved at once for super-admins and
+   * for people a workspace owner invited (the invite is the approval); anyone else waits. Active accounts always
+   * have a workspace.
+   */
+  private async afterSignIn(user: User, isNew = false): Promise<User> {
     const now = new Date();
-    const signedIn = await this.store.updateUser(user.id, { lastLoginAt: now });
+    let signedIn = await this.store.updateUser(user.id, { lastLoginAt: now });
+    let invited = 0;
     if (signedIn.emailVerified) {
       for (const invite of await this.store.listInvitesForEmail(signedIn.email)) {
         await this.store.putMembership({
@@ -188,7 +220,11 @@ export class Accounts {
           createdAt: now,
         });
         await this.store.deleteInvite(invite.id);
+        invited++;
       }
+    }
+    if (signedIn.status === 'pending' && (this.isSuperAdmin(signedIn) || invited > 0)) {
+      signedIn = await this.store.updateUser(signedIn.id, { status: 'active', approvedAt: now });
     }
     if (this.isSuperAdmin(signedIn)) {
       // Workspaces from before user accounts existed belong to the platform owner.
@@ -201,22 +237,109 @@ export class Accounts {
         });
       }
     }
-    if ((await this.store.listUserMemberships(signedIn.id)).length === 0) {
-      const tenant = await this.store.createTenant({
-        id: newId('tnt'),
-        name: `${signedIn.name}'s workspace`,
-        createdAt: now,
-      });
-      await this.store.putMembership({
-        userId: signedIn.id,
-        tenantId: tenant.id,
-        role: 'owner',
-        createdAt: now,
-      });
+    if (signedIn.status === 'active') await this.ensureWorkspace(signedIn);
+    else if (isNew && signedIn.status === 'pending' && this.options.onAccountRequested) {
+      await this.options.onAccountRequested(signedIn).catch(() => undefined);
     }
     return signedIn;
   }
+
+  /** Every active account has at least one workspace of its own. */
+  private async ensureWorkspace(user: User) {
+    if ((await this.store.listUserMemberships(user.id)).length > 0) return;
+    const now = new Date();
+    const tenant = await this.store.createTenant({
+      id: newId('tnt'),
+      name: `${user.name}'s workspace`,
+      createdAt: now,
+    });
+    await this.store.putMembership({ userId: user.id, tenantId: tenant.id, role: 'owner', createdAt: now });
+  }
+
+  /** A super-admin lets a pending (or earlier rejected) account in. */
+  async approve(user: User): Promise<User> {
+    const approved =
+      user.status === 'active'
+        ? user
+        : await this.store.updateUser(user.id, { status: 'active', approvedAt: new Date() });
+    await this.ensureWorkspace(approved);
+    return approved;
+  }
+
+  async reject(user: User): Promise<User> {
+    return this.store.updateUser(user.id, { status: 'rejected', approvedAt: null });
+  }
+
+  /**
+   * Changes the password from Settings. Accounts that have one must give it; Google-only accounts set their first
+   * password. Every other session of the account ends.
+   */
+  async changePassword(
+    user: User,
+    current: string | undefined,
+    next: string,
+  ): Promise<User | 'wrong_password'> {
+    if (user.passwordHash && !(current && (await verifyPassword(current, user.passwordHash))))
+      return 'wrong_password';
+    return this.store.updateUser(user.id, {
+      passwordHash: await hashPassword(next),
+      passwordChangedAt: new Date(),
+    });
+  }
+
+  /** Step 1 of two-step verification: a new key to scan; nothing changes for sign-in until it is confirmed. */
+  async setUpTwoFactor(user: User): Promise<{ secret: string; otpauthUrl: string } | 'already_enabled'> {
+    if (user.totpEnabledAt) return 'already_enabled';
+    const secret = newTotpSecret();
+    await this.store.updateUser(user.id, { totpSecret: this.secrets.seal(secret), totpLastStep: null });
+    return { secret, otpauthUrl: otpauthUrl(secret, user.email) };
+  }
+
+  /** Step 2: a code from the app proves it was scanned; returns the recovery codes, shown once. */
+  async enableTwoFactor(user: User, code: string): Promise<string[] | 'not_set_up' | 'invalid_code'> {
+    if (user.totpEnabledAt) return 'invalid_code';
+    if (!user.totpSecret) return 'not_set_up';
+    const step = verifyTotp(this.secrets.open(user.totpSecret), code, null);
+    if (step === null) return 'invalid_code';
+    const codes = newRecoveryCodes();
+    await this.store.updateUser(user.id, {
+      totpEnabledAt: new Date(),
+      totpLastStep: step,
+      recoveryCodeHashes: codes.map(hashRecoveryCode),
+    });
+    return codes;
+  }
+
+  /** Checks a code from the app, or uses up a recovery code. */
+  async verifySecondFactor(user: User, code: string): Promise<boolean> {
+    if (!user.totpEnabledAt || !user.totpSecret) return false;
+    const step = verifyTotp(this.secrets.open(user.totpSecret), code, user.totpLastStep);
+    if (step !== null) {
+      await this.store.updateUser(user.id, { totpLastStep: step });
+      return true;
+    }
+    const hash = hashRecoveryCode(code);
+    if (!user.recoveryCodeHashes.includes(hash)) return false;
+    await this.store.updateUser(user.id, {
+      recoveryCodeHashes: user.recoveryCodeHashes.filter((h) => h !== hash),
+    });
+    return true;
+  }
+
+  async disableTwoFactor(user: User, code: string): Promise<boolean> {
+    if (!(await this.verifySecondFactor(user, code))) return false;
+    await this.store.updateUser(user.id, {
+      totpSecret: null,
+      totpEnabledAt: null,
+      totpLastStep: null,
+      recoveryCodeHashes: [],
+    });
+    return true;
+  }
 }
+
+const hashRecoveryCode = (code: string) =>
+  createHash('sha256').update(code.trim().toLowerCase().replace(/\s/g, '')).digest('hex');
 
 /** Counts failed sign-ins per address and per client in memory, to slow down password guessing. */
 export class SignInLimiter {

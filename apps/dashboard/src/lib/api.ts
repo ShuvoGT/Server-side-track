@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation';
 import { env } from './env';
 import { getSession } from './session';
 import type {
+  AdminUser,
   Container,
   DnsRecord,
   Domain,
@@ -40,6 +41,7 @@ const MESSAGES: Record<string, string> = {
   unauthorized: 'The dashboard is not authorized to call the API. Check ADMIN_API_KEY.',
   unknown_user: 'Your account no longer exists. Sign in again.',
   session_revoked: 'Your password was changed. Sign in again.',
+  invalid_request: 'Some of the values are not valid.',
 };
 
 /**
@@ -73,6 +75,8 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
   if (!response.ok) {
     const code = typeof data.error === 'string' ? data.error : 'error';
+    // An account that is not (or no longer) approved sees the waiting page instead of an error.
+    if (code === 'account_pending' || code === 'account_rejected') redirect('/pending');
     const issues = Array.isArray(data.issues)
       ? (data.issues as { path?: unknown[]; message?: string }[])
           .map((i) => `${(i.path ?? []).join('.')}: ${i.message}`)
@@ -95,13 +99,33 @@ const ws = (id: string) => `/v1/tenants/${encodeURIComponent(id)}`;
 export const api = {
   platform: () => call<{ edgeHostname: string; edgeIpv4: string[] }>('GET', '/v1/platform'),
 
-  signUp: (input: { email: string; password: string; name: string }) =>
+  signUp: (input: { email: string; password: string; name: string; phoneCountry?: string; phone?: string }) =>
     call<Me>('POST', '/v1/auth/signup', input),
   signIn: (input: { email: string; password: string; clientIp?: string }) =>
     call<Me>('POST', '/v1/auth/signin', input),
   signInWithGoogle: (profile: { sub: string; email: string; emailVerified: boolean; name: string }) =>
     call<Me>('POST', '/v1/auth/google', profile),
   me: () => call<Me>('GET', '/v1/me'),
+  allUsers: () => call<AdminUser[]>('GET', '/v1/admin/users'),
+  approveUser: (id: string) =>
+    call<{ emailed: boolean }>('POST', `/v1/admin/users/${encodeURIComponent(id)}/approve`),
+  rejectUser: (id: string) => call<void>('POST', `/v1/admin/users/${encodeURIComponent(id)}/reject`),
+  deleteUser: (id: string) => call<void>('DELETE', `/v1/admin/users/${encodeURIComponent(id)}`),
+  verifySecondFactor: (userId: string, code: string) =>
+    call<Me>('POST', '/v1/auth/two-factor', { userId, code }),
+  updateProfile: (patch: {
+    name?: string;
+    phoneCountry?: string | null;
+    phone?: string | null;
+    currency?: string;
+    timezone?: string;
+  }) => call<Me>('PATCH', '/v1/me', patch),
+  changePassword: (currentPassword: string | undefined, newPassword: string) =>
+    call<Me>('POST', '/v1/me/password', { currentPassword, newPassword }),
+  setUpTwoFactor: () => call<{ secret: string; otpauthUrl: string }>('POST', '/v1/me/two-factor/setup'),
+  enableTwoFactor: (code: string) =>
+    call<{ recoveryCodes: string[] }>('POST', '/v1/me/two-factor/enable', { code }),
+  disableTwoFactor: (code: string) => call<Me>('POST', '/v1/me/two-factor/disable', { code }),
   requestPasswordReset: (email: string, clientIp?: string) =>
     call<{ sent: boolean }>('POST', '/v1/auth/password-reset', { email, clientIp }),
   resetPassword: (token: string, password: string) =>
@@ -110,6 +134,7 @@ export const api = {
   workspaces: () => call<Workspace[]>('GET', '/v1/tenants'),
   createWorkspace: (name: string) => call<Tenant>('POST', '/v1/tenants', { name }),
   renameWorkspace: (id: string, name: string) => call<Tenant>('PATCH', ws(id), { name }),
+  deleteWorkspace: (id: string) => call<void>('DELETE', ws(id)),
   members: (id: string) => call<{ members: Member[]; invites: Invite[] }>('GET', `${ws(id)}/members`),
   addMember: (id: string, email: string, role: Role) =>
     call<{ added?: { email: string }; invited?: Invite; emailed: boolean }>('POST', `${ws(id)}/members`, {

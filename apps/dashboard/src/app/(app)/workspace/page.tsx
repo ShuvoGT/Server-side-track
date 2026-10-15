@@ -1,15 +1,26 @@
-import { changeRole, removeMember, cancelInvite } from '@/app/actions';
-import { AddMemberForm, InlineAction, RenameWorkspaceForm } from '@/components/forms';
+import { approveUser, cancelInvite, changeRole, rejectUser, removeMember } from '@/app/actions';
+import { AddMemberForm, DeleteWorkspaceForm, InlineAction, RenameWorkspaceForm } from '@/components/forms';
 import { Alert, formatDateTime } from '@/components/ui';
 import { api } from '@/lib/api';
+import { formatPhone } from '@/lib/countries';
 import { currentWorkspace, getMe } from '@/lib/data';
 
 export const metadata = { title: 'Members' };
 
 export default async function WorkspacePage() {
   const [{ user }, workspace] = await Promise.all([getMe(), currentWorkspace()]);
-  const { members, invites } = await api.members(workspace.id);
+  const [{ members, invites }, containers, { workspaces }] = await Promise.all([
+    api.members(workspace.id),
+    api.containers(workspace.id),
+    getMe(),
+  ]);
+  const ownWorkspaces = workspaces.filter((w) => w.role).length;
+  const requests = user.superAdmin
+    ? (await api.allUsers()).filter((u) => u.status === 'pending' || u.status === 'rejected')
+    : [];
+  const pending = requests.filter((u) => u.status === 'pending');
   const canManage = workspace.role === 'owner' || user.superAdmin;
+  const tz = user.timezone;
   const owners = members.filter((m) => m.role === 'owner').length;
 
   return (
@@ -23,6 +34,75 @@ export default async function WorkspacePage() {
           </p>
         </div>
       </div>
+
+      {user.superAdmin && requests.length > 0 && (
+        <section className="card requests">
+          <div className="card-head">
+            <div>
+              <h2>Account requests</h2>
+              <p>
+                New accounts wait here until you approve them. Approving emails them and opens the dashboard.
+              </p>
+            </div>
+            {pending.length > 0 && <span className="badge badge-warning">{pending.length} waiting</span>}
+          </div>
+          <div className="table-wrap">
+            <table className="table">
+              <tbody>
+                {requests.map((u) => (
+                  <tr key={u.id}>
+                    <td>
+                      <div className="member">
+                        <span className="avatar" aria-hidden="true">
+                          {(u.name || u.email).slice(0, 1).toUpperCase()}
+                        </span>
+                        <div>
+                          <strong>{u.name}</strong>
+                          <div className="small muted">{u.email}</div>
+                          <div className="small muted">
+                            {formatPhone(u.phoneCountry, u.phone) ?? 'No phone number'}
+                          </div>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="small text-2">
+                      {u.hasGoogle ? 'Google' : 'Email and password'}
+                      {!u.emailVerified && ' · email not verified'}
+                    </td>
+                    <td className="small text-2">Signed up {formatDateTime(u.createdAt, tz)}</td>
+                    <td>
+                      <span
+                        className={`badge ${u.status === 'pending' ? 'badge-warning' : 'badge-critical'}`}
+                      >
+                        {u.status === 'pending' ? 'Waiting' : 'Rejected'}
+                      </span>
+                    </td>
+                    <td className="num">
+                      <div className="member-actions">
+                        <InlineAction
+                          action={approveUser.bind(null, u.id)}
+                          label="Approve"
+                          pending="Approving…"
+                          primary
+                        />
+                        {u.status === 'pending' && (
+                          <InlineAction
+                            action={rejectUser.bind(null, u.id)}
+                            label="Reject"
+                            pending="Rejecting…"
+                            confirm={`Reject ${u.email}? They cannot use the dashboard (you can approve them later).`}
+                            danger
+                          />
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
 
       {canManage && (
         <section className="card">
@@ -78,7 +158,7 @@ export default async function WorkspacePage() {
                       </span>
                     </td>
                     <td className="small text-2">
-                      {m.lastLoginAt ? formatDateTime(m.lastLoginAt) : 'Never'}
+                      {m.lastLoginAt ? formatDateTime(m.lastLoginAt, tz) : 'Never'}
                     </td>
                     <td className="num">
                       <div className="member-actions">
@@ -132,7 +212,7 @@ export default async function WorkspacePage() {
                     <td>
                       <span className="badge">{i.role === 'owner' ? 'Owner' : 'Member'}</span>
                     </td>
-                    <td className="small text-2">Invited {formatDateTime(i.createdAt)}</td>
+                    <td className="small text-2">Invited {formatDateTime(i.createdAt, tz)}</td>
                     <td className="num">
                       {canManage && (
                         <InlineAction
@@ -157,6 +237,35 @@ export default async function WorkspacePage() {
           </div>
           <div className="card-body">
             <RenameWorkspaceForm workspaceId={workspace.id} name={workspace.name} />
+          </div>
+        </section>
+      ) : null}
+
+      {canManage ? (
+        <section className="card danger-zone">
+          <div className="card-head">
+            <h2>Delete workspace</h2>
+          </div>
+          <div className="card-body stack" style={{ gap: 12 }}>
+            {containers.length > 0 ? (
+              <p className="text-2">
+                {workspace.name} still has{' '}
+                {containers.length === 1 ? 'a container' : `${containers.length} containers`}. Delete{' '}
+                {containers.length === 1 ? 'it' : 'them'} first (Container › Settings › Delete): that also
+                stops their tagging servers.
+              </p>
+            ) : workspace.role && ownWorkspaces <= 1 ? (
+              <p className="text-2">This is your only workspace, so it cannot be deleted.</p>
+            ) : (
+              <>
+                <p className="text-2">
+                  Deletes {workspace.name} for everyone: its{' '}
+                  {members.length === 1 ? 'member loses' : `${members.length} members lose`} access and
+                  pending invites are cancelled. This cannot be undone.
+                </p>
+                <DeleteWorkspaceForm workspaceId={workspace.id} name={workspace.name} />
+              </>
+            )}
           </div>
         </section>
       ) : (

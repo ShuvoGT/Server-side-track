@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { AuthCard, GoogleButton, OrDivider } from '@/components/auth';
 import { SignUpForm } from '@/components/forms';
+import { COUNTRIES } from '@/lib/countries';
 import { googleEnabled } from '@/lib/env';
 import { getSession } from '@/lib/session';
 
@@ -20,7 +21,7 @@ export default async function SignUpPage() {
           <OrDivider />
         </>
       )}
-      <SignUpForm />
+      <SignUpForm countries={COUNTRIES} />
       <p className="small text-2 auth-switch">
         Already have an account? <Link href="/login">Sign in</Link>
       </p>

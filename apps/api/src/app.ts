@@ -10,9 +10,17 @@ import {
   normalizeHost,
   parseContainerConfig,
   powerUpsSchema,
+  formatPhone,
 } from '@sst/shared';
 import { Accounts, MIN_PASSWORD_LENGTH, normalizeEmail, SignInLimiter } from './accounts.js';
-import { passwordResetMail, workspaceInviteMail, type Mailer } from './mailer.js';
+import {
+  accountApprovedMail,
+  accountRequestedMail,
+  passwordResetMail,
+  workspaceInviteMail,
+  type Mailer,
+} from './mailer.js';
+import { SecretBox } from './secretBox.js';
 import {
   containerView,
   newId,
@@ -57,6 +65,10 @@ export interface ApiDeps {
   mailer?: Mailer;
   /** The dashboard's public address, for links in emails. */
   dashboardUrl?: string;
+  /** Encrypts two-step verification keys; defaults to a key derived from the admin API key. */
+  secretsKey?: string;
+  /** New accounts wait for a super-admin's approval (default true). */
+  requireApproval?: boolean;
 }
 
 /** The signed-in dashboard user a /v1 request acts for (x-sst-user), or null for the admin key alone. */
@@ -113,10 +125,17 @@ function tokenMatches(header: string | undefined, expected: string): boolean {
 const DEFAULT_WEBHOOK_PATH = '/sst/woocommerce';
 
 const createTenantBody = z.object({ name: z.string().trim().min(1).max(200) });
+const phoneCountrySchema = z.string().regex(/^[A-Z]{2}$/);
+const phoneSchema = z
+  .string()
+  .trim()
+  .regex(/^[0-9 ()+-]{4,20}$/, 'Enter digits only, e.g. 1711421236');
 const signUpBody = z.object({
   email: z.email().max(254),
   password: z.string().min(MIN_PASSWORD_LENGTH).max(200),
   name: z.string().max(100).default(''),
+  phoneCountry: phoneCountrySchema.optional(),
+  phone: phoneSchema.optional(),
 });
 const signInBody = z.object({
   email: z.string().max(254),
@@ -134,6 +153,33 @@ const resetRequestBody = z.object({ email: z.string().max(254), clientIp: z.stri
 const resetConfirmBody = z.object({
   token: z.string().min(20).max(200),
   password: z.string().min(MIN_PASSWORD_LENGTH).max(200),
+});
+const isTimeZone = (tz: string) => {
+  try {
+    new Intl.DateTimeFormat('en', { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+};
+const profileBody = z.object({
+  name: z.string().trim().min(1).max(100).optional(),
+  phoneCountry: phoneCountrySchema.nullable().optional(),
+  phone: phoneSchema.nullable().optional(),
+  currency: z
+    .string()
+    .regex(/^[A-Z]{3}$/)
+    .optional(),
+  timezone: z.string().max(64).refine(isTimeZone, 'Unknown time zone').optional(),
+});
+const changePasswordBody = z.object({
+  currentPassword: z.string().max(200).optional(),
+  newPassword: z.string().min(MIN_PASSWORD_LENGTH).max(200),
+});
+const codeBody = z.object({ code: z.string().trim().min(6).max(20) });
+const secondFactorBody = z.object({
+  userId: z.string().min(1).max(64),
+  code: z.string().trim().min(6).max(20),
 });
 const roleSchema = z.enum(['owner', 'member']);
 const addMemberBody = z.object({ email: z.email().max(254), role: roleSchema.default('member') });
@@ -207,7 +253,50 @@ export function buildApi(deps: ApiDeps): { app: FastifyInstance; internal: Fasti
     return reply.code(500).send({ error: 'internal_error' });
   };
 
-  const accounts = new Accounts(store, deps.superAdminEmails ?? []);
+  /** Best-effort email: a failure is logged, never shown to whoever triggered it. */
+  const sendMail = async (message: Parameters<Mailer['send']>[0], log: FastifyInstance['log']) => {
+    if (!deps.mailer) return false;
+    try {
+      await deps.mailer.send(message);
+      return true;
+    } catch (err) {
+      log.error({ err, subject: message.subject }, 'email failed');
+      return false;
+    }
+  };
+  const dashboardLink = (path: string) =>
+    new URL(path, deps.dashboardUrl ?? 'http://localhost:3100').toString();
+
+  const accounts = new Accounts(
+    store,
+    deps.superAdminEmails ?? [],
+    new SecretBox(deps.secretsKey ?? `admin:${deps.adminApiKey}`),
+    {
+      requireApproval: deps.requireApproval ?? true,
+      // Tell every super-admin about a new account that waits for approval.
+      onAccountRequested: async (user) => {
+        for (const to of deps.superAdminEmails ?? []) {
+          await sendMail(
+            accountRequestedMail({
+              to,
+              name: user.name,
+              email: user.email,
+              method: user.googleSub ? 'Google' : 'an email and password',
+              phone: formatPhone(user.phoneCountry, user.phone),
+              link: dashboardLink('/workspace'),
+            }),
+            app.log,
+          );
+        }
+      },
+    },
+  );
+  // Wrong second-factor codes per account: six digits must not be guessable.
+  const codeLimiter = new SignInLimiter(5, 15 * 60_000);
+  const meOr400 = (req: FastifyRequest) => {
+    if (!req.actor) throw new HttpError(400, 'no_user', 'Send x-sst-user.');
+    return req.actor.user;
+  };
   const signInLimiter = new SignInLimiter();
   // Reset emails per client: a few per hour is plenty for people, and keeps the form from being used to spam.
   const resetLimiter = new SignInLimiter(5, 3_600_000);
@@ -292,6 +381,15 @@ export function buildApi(deps: ApiDeps): { app: FastifyInstance; internal: Fasti
           const issuedAt = Number(req.headers['x-sst-session-issued-at']) * 1000;
           if (user.passwordChangedAt && !(issuedAt + 1000 >= user.passwordChangedAt.getTime()))
             throw new HttpError(401, 'session_revoked');
+          // Until a super-admin approves the account, it may only ask who it is.
+          if (user.status !== 'active' && !(req.method === 'GET' && req.url.split('?')[0] === '/v1/me'))
+            throw new HttpError(
+              403,
+              user.status === 'rejected' ? 'account_rejected' : 'account_pending',
+              user.status === 'rejected'
+                ? 'This account was not approved.'
+                : 'This account is waiting for approval.',
+            );
           const memberships = await store.listUserMemberships(user.id);
           req.actor = {
             user,
@@ -385,9 +483,177 @@ export function buildApi(deps: ApiDeps): { app: FastifyInstance; internal: Fasti
         return sessionView(user);
       });
 
-      v1.get('/me', async (req) => {
-        if (!req.actor) throw new HttpError(400, 'no_user', 'Send x-sst-user.');
-        return sessionView(req.actor.user);
+      /** The second step of a sign-in with two-step verification on: a code from the app or a recovery code. */
+      v1.post('/auth/two-factor', async (req) => {
+        const body = secondFactorBody.parse(req.body);
+        const key = `2fa:${body.userId}`;
+        if (codeLimiter.blocked(key))
+          throw new HttpError(429, 'too_many_attempts', 'Too many wrong codes. Try again in 15 minutes.');
+        const user = await store.getUser(body.userId);
+        if (!user || !(await accounts.verifySecondFactor(user, body.code))) {
+          codeLimiter.fail(key);
+          throw new HttpError(
+            401,
+            'invalid_code',
+            'That code is not right. Check the time on your phone too.',
+          );
+        }
+        codeLimiter.succeed(key);
+        return sessionView(await store.getUser(user.id).then((u) => u!));
+      });
+
+      v1.get('/me', async (req) => sessionView(meOr400(req)));
+
+      // Account settings
+
+      v1.patch('/me', async (req) => {
+        const user = meOr400(req);
+        const body = profileBody.parse(req.body);
+        const updated = await store.updateUser(user.id, {
+          ...(body.name !== undefined && { name: body.name }),
+          ...(body.phoneCountry !== undefined && { phoneCountry: body.phoneCountry }),
+          ...(body.phone !== undefined && { phone: body.phone ? body.phone.replace(/\s+/g, ' ') : null }),
+          ...(body.currency !== undefined && { currency: body.currency }),
+          ...(body.timezone !== undefined && { timezone: body.timezone }),
+        });
+        return sessionView(updated);
+      });
+
+      /** Ends every other session; the dashboard signs the current one in again. */
+      v1.post('/me/password', async (req) => {
+        const user = meOr400(req);
+        const body = changePasswordBody.parse(req.body);
+        const key = `password:${user.id}`;
+        if (codeLimiter.blocked(key))
+          throw new HttpError(429, 'too_many_attempts', 'Too many wrong passwords. Try again in 15 minutes.');
+        const updated = await accounts.changePassword(user, body.currentPassword, body.newPassword);
+        if (updated === 'wrong_password') {
+          codeLimiter.fail(key);
+          throw new HttpError(400, 'wrong_password', 'The current password is not right.');
+        }
+        codeLimiter.succeed(key);
+        return sessionView(updated);
+      });
+
+      v1.post('/me/two-factor/setup', async (req) => {
+        const result = await accounts.setUpTwoFactor(meOr400(req));
+        if (result === 'already_enabled')
+          throw new HttpError(409, 'already_enabled', 'Two-step verification is already on.');
+        return result;
+      });
+
+      v1.post('/me/two-factor/enable', async (req) => {
+        const user = meOr400(req);
+        const result = await accounts.enableTwoFactor(user, codeBody.parse(req.body).code);
+        if (result === 'not_set_up') throw new HttpError(409, 'not_set_up', 'Start the setup again.');
+        if (result === 'invalid_code')
+          throw new HttpError(
+            400,
+            'invalid_code',
+            'That code is not right. Check the time on your phone too.',
+          );
+        return { recoveryCodes: result };
+      });
+
+      v1.post('/me/two-factor/disable', async (req) => {
+        const user = meOr400(req);
+        const key = `2fa:${user.id}`;
+        if (codeLimiter.blocked(key))
+          throw new HttpError(429, 'too_many_attempts', 'Too many wrong codes. Try again in 15 minutes.');
+        if (!(await accounts.disableTwoFactor(user, codeBody.parse(req.body).code))) {
+          codeLimiter.fail(key);
+          throw new HttpError(400, 'invalid_code', 'That code is not right.');
+        }
+        codeLimiter.succeed(key);
+        return sessionView((await store.getUser(user.id))!);
+      });
+
+      /** Everyone who has an account, with their workspaces. Super-admins (or the admin key alone) only. */
+      v1.get('/admin/users', async (req) => {
+        if (req.actor && !req.actor.superAdmin)
+          throw new HttpError(403, 'forbidden', 'Only super-admins can see all users.');
+        const [users, memberships, tenants] = await Promise.all([
+          store.listUsers(),
+          store.listAllMemberships(),
+          store.listTenants(),
+        ]);
+        const tenantName = new Map(tenants.map((t) => [t.id, t.name]));
+        return users.map((u) => ({
+          ...userView(u, accounts.isSuperAdmin(u)),
+          lastLoginAt: u.lastLoginAt,
+          workspaces: memberships
+            .filter((m) => m.userId === u.id)
+            .map((m) => ({ id: m.tenantId, name: tenantName.get(m.tenantId) ?? '?', role: m.role })),
+        }));
+      });
+
+      /** Approves a pending (or rejected) account and emails its owner. Super-admins only. */
+      v1.post<{ Params: { id: string } }>('/admin/users/:id/approve', async (req) => {
+        if (req.actor && !req.actor.superAdmin)
+          throw new HttpError(403, 'forbidden', 'Only super-admins can approve accounts.');
+        const user = await store.getUser(req.params.id);
+        if (!user) throw notFound('User');
+        const wasActive = user.status === 'active';
+        const approved = await accounts.approve(user);
+        const emailed = wasActive
+          ? false
+          : await sendMail(
+              accountApprovedMail({ to: approved.email, name: approved.name, link: dashboardLink('/login') }),
+              req.log,
+            );
+        return { user: userView(approved, accounts.isSuperAdmin(approved)), emailed };
+      });
+
+      /**
+       * Deletes an account. Workspaces it shares with another owner stay; a workspace only it belongs to is deleted
+       * with it when empty. Refused while that would leave containers or members without an owner.
+       */
+      v1.delete<{ Params: { id: string } }>('/admin/users/:id', async (req, reply) => {
+        if (req.actor && !req.actor.superAdmin)
+          throw new HttpError(403, 'forbidden', 'Only super-admins can delete accounts.');
+        const user = await store.getUser(req.params.id);
+        if (!user) throw notFound('User');
+        if (req.actor?.user.id === user.id)
+          throw new HttpError(409, 'self', 'You cannot delete your own account here.');
+        if (accounts.isSuperAdmin(user))
+          throw new HttpError(409, 'super_admin', 'Super-admins cannot be deleted.');
+
+        const emptyWorkspaces: string[] = [];
+        for (const m of await store.listUserMemberships(user.id)) {
+          const members = await store.listTenantMembers(m.tenantId);
+          const otherOwner = members.some((o) => o.userId !== user.id && o.role === 'owner');
+          if (otherOwner) continue;
+          const tenant = await store.getTenant(m.tenantId);
+          const name = tenant?.name ?? m.tenantId;
+          if (members.length > 1)
+            throw new HttpError(
+              409,
+              'only_owner',
+              `${user.email} is the only owner of ${name}. Make another member an owner first.`,
+            );
+          const containers = await store.listContainers(m.tenantId);
+          if (containers.length > 0)
+            throw new HttpError(
+              409,
+              'workspace_not_empty',
+              `${name} still has ${containers.length === 1 ? 'a container' : `${containers.length} containers`}. Delete ${containers.length === 1 ? 'it' : 'them'} first.`,
+            );
+          emptyWorkspaces.push(m.tenantId);
+        }
+        for (const id of emptyWorkspaces) await store.deleteTenant(id);
+        await store.deleteUser(user.id);
+        return reply.code(204).send();
+      });
+
+      v1.post<{ Params: { id: string } }>('/admin/users/:id/reject', async (req) => {
+        if (req.actor && !req.actor.superAdmin)
+          throw new HttpError(403, 'forbidden', 'Only super-admins can reject accounts.');
+        const user = await store.getUser(req.params.id);
+        if (!user) throw notFound('User');
+        if (accounts.isSuperAdmin(user))
+          throw new HttpError(409, 'super_admin', 'Super-admins cannot be rejected.');
+        const rejected = await accounts.reject(user);
+        return { user: userView(rejected, false) };
       });
 
       // Workspaces
@@ -412,6 +678,26 @@ export function buildApi(deps: ApiDeps): { app: FastifyInstance; internal: Fasti
         const tenant = await getTenantOr404(req.params.id, req);
         if (!canManage(req, tenant.id)) throw ownersOnly();
         return store.renameTenant(tenant.id, createTenantBody.parse(req.body).name);
+      });
+
+      /**
+       * Deletes an empty workspace. Containers must be deleted first (that stops their tagging servers), and nobody
+       * may delete their only workspace.
+       */
+      v1.delete<{ Params: { id: string } }>('/tenants/:id', async (req, reply) => {
+        const tenant = await getTenantOr404(req.params.id, req);
+        if (!canManage(req, tenant.id)) throw ownersOnly();
+        const containers = await store.listContainers(tenant.id);
+        if (containers.length > 0)
+          throw new HttpError(
+            409,
+            'workspace_not_empty',
+            `Delete its ${containers.length === 1 ? 'container' : `${containers.length} containers`} first.`,
+          );
+        if (req.actor?.roles.has(tenant.id) && req.actor.roles.size === 1)
+          throw new HttpError(409, 'last_workspace', 'This is your only workspace, so it cannot be deleted.');
+        await store.deleteTenant(tenant.id);
+        return reply.code(204).send();
       });
 
       v1.get<{ Params: { id: string } }>('/tenants/:id/members', async (req) => {
@@ -462,6 +748,8 @@ export function buildApi(deps: ApiDeps): { app: FastifyInstance; internal: Fasti
         };
 
         if (user?.emailVerified) {
+          // A workspace owner vouching for someone also approves a pending account.
+          if (user.status === 'pending') await accounts.approve(user);
           await store.putMembership({
             userId: user.id,
             tenantId: tenant.id,

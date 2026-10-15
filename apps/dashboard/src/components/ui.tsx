@@ -164,13 +164,14 @@ export function Skeleton({ width = '100%', height = 16 }: { width?: number | str
 const numberFormat = new Intl.NumberFormat('en');
 export const formatNumber = (n: number) => numberFormat.format(n);
 
-export function formatDateTime(value: string | null): string {
+/** Short date and time in the signed-in user's time zone (Settings › Preferences). */
+export function formatDateTime(value: string | null, timeZone = 'Asia/Dhaka'): string {
   if (!value) return '—';
   return new Date(value).toLocaleString('en-GB', {
     day: 'numeric',
     month: 'short',
     hour: '2-digit',
     minute: '2-digit',
-    timeZone: 'Asia/Dhaka',
+    timeZone,
   });
 }

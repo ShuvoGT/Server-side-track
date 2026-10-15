@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { ContainerRoute } from '@sst/shared';
 import { buildApi, resyncRoutes } from '../src/app.js';
 import type { MailMessage } from '../src/mailer.js';
+import { base32Decode, currentStep, hotp } from '../src/totp.js';
 import { MemoryStore } from '../src/memoryStore.js';
 import {
   checkDomainDns,
@@ -47,7 +48,7 @@ const liveData: LiveData = {
   pendingUsage: async () => [{ hour: new Date('2026-10-13T09:00:00Z'), counts: { requests: 4, errors: 1 } }],
 };
 
-function setup() {
+function setup(options: { requireApproval?: boolean } = {}) {
   const store = new MemoryStore();
   const publisher = new RecordingPublisher();
   const queue = new LoggingProvisioningQueue();
@@ -68,6 +69,8 @@ function setup() {
     superAdminEmails: ['boss@ibos.io'],
     mailer: { send: async (m) => void mails.push(m) },
     dashboardUrl: 'https://dash.platform.test',
+    // Most tests are about other things; the approval tests below turn it on.
+    requireApproval: options.requireApproval ?? false,
   });
   const auth = { authorization: `Bearer ${ADMIN}` };
   const call = async (method: 'GET' | 'POST' | 'PATCH' | 'DELETE', url: string, payload?: object) => {
@@ -544,6 +547,128 @@ describe('accounts and workspaces', () => {
     expect((await newContainer(g.body.user.id, other.workspaces[0]!.id)).status).toBe(201);
   });
 
+  it('updates profile and preferences, and validates them', async () => {
+    const a = await signUp('settings@example.com');
+    const ok = await as(a.user.id, 'PATCH', '/v1/me', {
+      name: 'Mubasshir',
+      phoneCountry: 'BD',
+      phone: '1711421236',
+      currency: 'USD',
+      timezone: 'Europe/London',
+    });
+    expect(ok.status).toBe(200);
+    expect(ok.body.user).toMatchObject({
+      name: 'Mubasshir',
+      phoneCountry: 'BD',
+      phone: '1711421236',
+      currency: 'USD',
+      timezone: 'Europe/London',
+      twoFactorEnabled: false,
+    });
+    expect((await as(a.user.id, 'PATCH', '/v1/me', { timezone: 'Mars/Olympus' })).status).toBe(400);
+    expect((await as(a.user.id, 'PATCH', '/v1/me', { currency: 'taka' })).status).toBe(400);
+    expect((await as(a.user.id, 'PATCH', '/v1/me', { phone: 'call me' })).status).toBe(400);
+  });
+
+  it('changes a password only with the current one, and lets Google accounts set a first one', async () => {
+    const a = await signUp('pw@example.com', 'first password');
+    const change = (userId: string, body: object) => as(userId, 'POST', '/v1/me/password', body);
+    expect(
+      (await change(a.user.id, { currentPassword: 'wrong one', newPassword: 'second password' })).status,
+    ).toBe(400);
+    expect((await change(a.user.id, { newPassword: 'second password' })).status).toBe(400);
+    expect(
+      (await change(a.user.id, { currentPassword: 'first password', newPassword: 'second password' })).status,
+    ).toBe(200);
+    expect((await signIn('pw@example.com', 'second password')).status).toBe(200);
+
+    const g = await google('g-pw', 'gonly@example.com');
+    expect(g.body.user.hasPassword).toBe(false);
+    const set = await change(g.body.user.id, { newPassword: 'my first password' });
+    expect(set.body.user.hasPassword).toBe(true);
+    expect((await signIn('gonly@example.com', 'my first password')).status).toBe(200);
+  });
+
+  it('turns on two-step verification and asks for a code at sign-in', async () => {
+    const a = await signUp('2fa@example.com', 'two factor pw');
+    const id = a.user.id;
+    const setup = await as(id, 'POST', '/v1/me/two-factor/setup');
+    expect(setup.status).toBe(200);
+    expect(setup.body.otpauthUrl).toContain('otpauth://totp/');
+    const key = base32Decode(setup.body.secret);
+    const codeAt = (offsetSteps = 0) => hotp(key, currentStep() + offsetSteps);
+
+    // The key is stored encrypted.
+    expect((await t.store.getUser(id))!.totpSecret).not.toContain(setup.body.secret);
+    expect((await as(id, 'POST', '/v1/me/two-factor/enable', { code: '000000' })).status).toBe(400);
+    const enabled = await as(id, 'POST', '/v1/me/two-factor/enable', { code: codeAt(-1) });
+    expect(enabled.status).toBe(200);
+    const recovery = enabled.body.recoveryCodes as string[];
+    expect(recovery).toHaveLength(10);
+
+    const signedIn = await signIn('2fa@example.com', 'two factor pw');
+    expect(signedIn.body.user.twoFactorEnabled).toBe(true);
+    const second = (code: string) => t.call('POST', '/v1/auth/two-factor', { userId: id, code });
+    expect((await second('123456')).status).toBe(401);
+    expect((await second(codeAt())).status).toBe(200);
+    expect((await second(codeAt())).status).toBe(401); // the same code works once
+    expect((await second(recovery[0]!.toUpperCase())).status).toBe(200);
+    expect((await second(recovery[0]!)).status).toBe(401);
+    expect((await as(id, 'GET', '/v1/me')).body.user.recoveryCodesLeft).toBe(9);
+
+    expect((await as(id, 'POST', '/v1/me/two-factor/disable', { code: '111111' })).status).toBe(400);
+    const off = await as(id, 'POST', '/v1/me/two-factor/disable', { code: recovery[1]! });
+    expect(off.body.user.twoFactorEnabled).toBe(false);
+  });
+
+  it('deletes empty workspaces, for owners, but never the last one', async () => {
+    const owner = await signUp('del@example.com');
+    const first = owner.workspaces[0]!.id;
+    const second = await as(owner.user.id, 'POST', '/v1/tenants', { name: 'Client B' });
+    const ws = second.body.id as string;
+    await as(owner.user.id, 'POST', `/v1/tenants/${ws}/members`, { email: 'pending@example.com' });
+
+    // Members cannot delete it.
+    const member = await google('g-del', 'm@example.com');
+    await as(owner.user.id, 'POST', `/v1/tenants/${ws}/members`, { email: 'm@example.com' });
+    expect((await as(member.body.user.id, 'DELETE', `/v1/tenants/${ws}`)).status).toBe(403);
+
+    // Not while it has containers.
+    const c = await newContainer(owner.user.id, ws);
+    const blocked = await as(owner.user.id, 'DELETE', `/v1/tenants/${ws}`);
+    expect(blocked.status).toBe(409);
+    expect(blocked.body.error).toBe('workspace_not_empty');
+    await t.store.deleteContainer(c.body.id);
+
+    expect((await as(owner.user.id, 'DELETE', `/v1/tenants/${ws}`)).status).toBe(204);
+    expect(await t.store.getTenant(ws)).toBeNull();
+    expect(await t.store.listInvites(ws)).toEqual([]);
+    expect(
+      (await as(member.body.user.id, 'GET', '/v1/tenants')).body.map((w: { id: string }) => w.id),
+    ).not.toContain(ws);
+
+    // The only workspace left stays.
+    const last = await as(owner.user.id, 'DELETE', `/v1/tenants/${first}`);
+    expect(last.status).toBe(409);
+    expect(last.body.error).toBe('last_workspace');
+  });
+
+  it('lists every user for super-admins only', async () => {
+    const a = await signUp('first@example.com');
+    const boss = (await google('g-boss', 'boss@ibos.io')).body.user.id as string;
+
+    const list = await as(boss, 'GET', '/v1/admin/users');
+    expect(list.status).toBe(200);
+    const users = list.body as { email: string; hasGoogle: boolean; workspaces: { role: string }[] }[];
+    expect(users.map((u) => u.email).sort()).toEqual(['boss@ibos.io', 'first@example.com']);
+    const byEmail = (email: string) => users.find((u) => u.email === email)!;
+    expect(byEmail('boss@ibos.io').hasGoogle).toBe(true);
+    expect(byEmail('first@example.com').workspaces[0]!.role).toBe('owner');
+    expect(JSON.stringify(users)).not.toContain('passwordHash');
+
+    expect((await as(a.user.id, 'GET', '/v1/admin/users')).status).toBe(403);
+  });
+
   it('resets a password by email link, once, and ends older sessions', async () => {
     const ana = await signUp('reset@example.com', 'old password');
     const reset = (email: string) => t.call('POST', '/v1/auth/password-reset', { email });
@@ -587,5 +712,145 @@ describe('accounts and workspaces', () => {
       await t.call('POST', '/v1/auth/password-reset', { email: 'many@example.com' });
     expect(t.mails).toHaveLength(3);
     expect((await t.call('POST', '/v1/auth/password-reset', { email: 'many@example.com' })).status).toBe(429);
+  });
+});
+
+describe('account approval', () => {
+  beforeEach(() => {
+    t = setup({ requireApproval: true });
+  });
+  const as = async (userId: string, method: 'GET' | 'POST', url: string, payload?: object) => {
+    const res = await t.app.inject({
+      method,
+      url,
+      payload,
+      headers: {
+        authorization: `Bearer ${ADMIN}`,
+        'x-sst-user': userId,
+        'x-sst-session-issued-at': String(Math.floor(Date.now() / 1000)),
+      },
+    });
+    return { status: res.statusCode, body: res.body ? res.json() : undefined };
+  };
+  const google = (sub: string, email: string) =>
+    t.call('POST', '/v1/auth/google', { sub, email, emailVerified: true, name: email.split('@')[0] });
+
+  it('keeps new accounts out until a super-admin approves them, and emails both sides', async () => {
+    const boss = (await google('g-boss', 'boss@ibos.io')).body;
+    expect(boss.user.status).toBe('active');
+    expect(t.mails).toHaveLength(0);
+
+    const newcomer = (await google('g-new', 'newcomer@example.com')).body;
+    expect(newcomer.user.status).toBe('pending');
+    expect(newcomer.workspaces).toEqual([]);
+    // The super-admins hear about it.
+    expect(t.mails.map((m) => m.to)).toEqual(['boss@ibos.io']);
+    expect(t.mails[0]!.subject).toContain('newcomer@example.com');
+
+    const id = newcomer.user.id as string;
+    expect((await as(id, 'GET', '/v1/me')).status).toBe(200);
+    const blocked = await as(id, 'GET', '/v1/tenants');
+    expect(blocked.status).toBe(403);
+    expect(blocked.body.error).toBe('account_pending');
+
+    // Only super-admins decide.
+    const other = (
+      await t.call('POST', '/v1/auth/signup', { email: 'x@example.com', password: 'longenough' })
+    ).body;
+    expect(other.user.status).toBe('pending');
+    expect((await as(other.user.id, 'POST', `/v1/admin/users/${id}/approve`)).status).toBe(403);
+
+    const approved = await as(boss.user.id, 'POST', `/v1/admin/users/${id}/approve`);
+    expect(approved.status).toBe(200);
+    expect(approved.body.user.status).toBe('active');
+    expect(approved.body.emailed).toBe(true);
+    expect(t.mails.at(-1)!.to).toBe('newcomer@example.com');
+    expect(t.mails.at(-1)!.subject).toContain('approved');
+    const me = await as(id, 'GET', '/v1/me');
+    expect(me.body.workspaces).toHaveLength(1);
+    expect((await as(id, 'GET', '/v1/tenants')).status).toBe(200);
+
+    const rejected = await as(boss.user.id, 'POST', `/v1/admin/users/${other.user.id}/reject`);
+    expect(rejected.body.user.status).toBe('rejected');
+    const denied = await as(other.user.id, 'GET', '/v1/containers');
+    expect(denied.body.error).toBe('account_rejected');
+    expect((await as(boss.user.id, 'POST', `/v1/admin/users/${boss.user.id}/reject`)).status).toBe(409);
+  });
+
+  it('puts the phone number of a sign-up in the approval request email', async () => {
+    await google('g-boss', 'boss@ibos.io');
+    const res = await t.call('POST', '/v1/auth/signup', {
+      email: 'phone@example.com',
+      password: 'longenough',
+      name: 'Mubasshir',
+      phoneCountry: 'BD',
+      phone: '01711421236',
+    });
+    expect(res.body.user).toMatchObject({ phoneCountry: 'BD', phone: '01711421236', status: 'pending' });
+    expect(t.mails).toHaveLength(1);
+    expect(t.mails[0]!.text).toContain('Phone: +880 1711421236');
+    expect(t.mails[0]!.html).toContain('+880 1711421236');
+
+    const bad = await t.call('POST', '/v1/auth/signup', {
+      email: 'bad@example.com',
+      password: 'longenough',
+      phone: 'call me maybe',
+    });
+    expect(bad.status).toBe(400);
+  });
+
+  it('deletes accounts safely: shared workspaces stay, empty own ones go, containers block it', async () => {
+    const boss = (await google('g-boss', 'boss@ibos.io')).body;
+    const approve = (id: string) => as(boss.user.id, 'POST', `/v1/admin/users/${id}/approve`);
+
+    // Alone in an empty workspace: the workspace goes with the account.
+    const solo = (await google('g-solo', 'solo@example.com')).body;
+    await approve(solo.user.id);
+    const soloWs = (await as(solo.user.id, 'GET', '/v1/me')).body.workspaces[0].id;
+    expect((await as(boss.user.id, 'DELETE', `/v1/admin/users/${solo.user.id}`)).status).toBe(204);
+    expect(await t.store.getUser(solo.user.id)).toBeNull();
+    expect(await t.store.getTenant(soloWs)).toBeNull();
+    expect((await as(solo.user.id, 'GET', '/v1/me')).status).toBe(401);
+
+    // Owner of a workspace with a container: refused.
+    const busy = (await google('g-busy', 'busy@example.com')).body;
+    await approve(busy.user.id);
+    const busyWs = (await as(busy.user.id, 'GET', '/v1/me')).body.workspaces[0].id;
+    await as(busy.user.id, 'POST', '/v1/containers', {
+      tenantId: busyWs,
+      name: 'Site',
+      containerConfig: CONFIG,
+    });
+    const refused = await as(boss.user.id, 'DELETE', `/v1/admin/users/${busy.user.id}`);
+    expect(refused.status).toBe(409);
+    expect(refused.body.error).toBe('workspace_not_empty');
+
+    // A co-owner of a shared workspace: only the membership goes.
+    await as(busy.user.id, 'POST', `/v1/tenants/${busyWs}/members`, { email: 'boss@ibos.io', role: 'owner' });
+    const co = (await google('g-co', 'co@example.com')).body;
+    await approve(co.user.id);
+    await as(busy.user.id, 'POST', `/v1/tenants/${busyWs}/members`, {
+      email: 'co@example.com',
+      role: 'owner',
+    });
+    expect((await as(boss.user.id, 'DELETE', `/v1/admin/users/${co.user.id}`)).status).toBe(204);
+    expect(await t.store.getTenant(busyWs)).not.toBeNull();
+
+    // Never yourself, never a super-admin, never by someone else.
+    expect((await as(boss.user.id, 'DELETE', `/v1/admin/users/${boss.user.id}`)).status).toBe(409);
+    expect((await as(busy.user.id, 'DELETE', `/v1/admin/users/${boss.user.id}`)).status).toBe(403);
+  });
+
+  it('lets invited people straight in', async () => {
+    await google('g-boss', 'boss@ibos.io');
+    const owner = (await google('g-own', 'owner@example.com')).body;
+    const boss = (await google('g-boss', 'boss@ibos.io')).body;
+    await as(boss.user.id, 'POST', `/v1/admin/users/${owner.user.id}/approve`);
+    const ws = (await as(owner.user.id, 'GET', '/v1/me')).body.workspaces[0].id;
+    await as(owner.user.id, 'POST', `/v1/tenants/${ws}/members`, { email: 'teammate@example.com' });
+
+    const mate = (await google('g-mate', 'teammate@example.com')).body;
+    expect(mate.user.status).toBe('active');
+    expect(mate.workspaces.map((w: { id: string }) => w.id)).toContain(ws);
   });
 });

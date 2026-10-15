@@ -6,13 +6,14 @@ import {
   SettingsForm,
 } from '@/components/forms';
 import { formatDateTime } from '@/components/ui';
-import { getContainer } from '@/lib/data';
+import { getContainer, getMe } from '@/lib/data';
 
 export const metadata = { title: 'Settings' };
 
 export default async function SettingsPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const container = await getContainer(id);
+  const [container, { user }] = await Promise.all([getContainer(id), getMe()]);
+  const tz = user.timezone;
   return (
     <div className="stack">
       <div className="card">
@@ -58,7 +59,7 @@ export default async function SettingsPage({ params }: { params: Promise<{ id: s
             <dt>Webhook path</dt>
             <dd className="mono">{container.webhookPath}</dd>
             <dt>Created</dt>
-            <dd>{formatDateTime(container.createdAt)}</dd>
+            <dd>{formatDateTime(container.createdAt, tz)}</dd>
           </dl>
         </div>
       </div>

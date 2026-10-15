@@ -100,18 +100,19 @@ function newerFirst(a: RequestLogEntry, b: RequestLogEntry) {
   return b1 - a1 || b2 - a2;
 }
 
-const timeFmt = new Intl.DateTimeFormat('en-GB', {
-  timeZone: 'Asia/Dhaka',
-  hour: '2-digit',
-  minute: '2-digit',
-  second: '2-digit',
-});
-const dateFmt = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Dhaka', day: 'numeric', month: 'short' });
-const fullFmt = new Intl.DateTimeFormat('en-GB', {
-  timeZone: 'Asia/Dhaka',
-  dateStyle: 'medium',
-  timeStyle: 'medium',
-});
+/** Formatters in the user's time zone (Settings › Preferences). */
+function formattersFor(timeZone: string) {
+  return {
+    timeFmt: new Intl.DateTimeFormat('en-GB', {
+      timeZone,
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    }),
+    dateFmt: new Intl.DateTimeFormat('en-GB', { timeZone, day: 'numeric', month: 'short' }),
+    fullFmt: new Intl.DateTimeFormat('en-GB', { timeZone, dateStyle: 'medium', timeStyle: 'medium' }),
+  };
+}
 const num = new Intl.NumberFormat('en');
 const rtf = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
 
@@ -180,7 +181,8 @@ const STAT_ICONS = {
   types: svg('M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8ZM7.5 7.5h.01'),
 };
 
-export function LogsView({ containerId }: { containerId: string }) {
+export function LogsView({ containerId, timeZone }: { containerId: string; timeZone: string }) {
+  const { timeFmt, dateFmt, fullFmt } = useMemo(() => formattersFor(timeZone), [timeZone]);
   const [entries, setEntries] = useState<RequestLogEntry[]>([]);
   const [available, setAvailable] = useState(true);
   const [loading, setLoading] = useState(true);
@@ -625,7 +627,7 @@ export function LogsView({ containerId }: { containerId: string }) {
                       </svg>
                       {num.format(e.durationMs)} ms
                     </span>
-                    <span className="log-when" title={`${fullFmt.format(at)} (Dhaka)`}>
+                    <span className="log-when" title={`${fullFmt.format(at)} (${timeZone})`}>
                       {ago(at.getTime(), lastLoaded?.getTime() ?? at.getTime())}
                       <span className="mono small muted">{timeFmt.format(at)}</span>
                     </span>
@@ -649,7 +651,7 @@ export function LogsView({ containerId }: { containerId: string }) {
                     <dl className="kv small">
                       <dt>Received</dt>
                       <dd>
-                        {fullFmt.format(at)} (Dhaka) · {dateFmt.format(at)}
+                        {fullFmt.format(at)} ({timeZone}) · {dateFmt.format(at)}
                       </dd>
                       <dt>Request ID</dt>
                       <dd className="mono">{e.requestId}</dd>

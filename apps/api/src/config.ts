@@ -37,12 +37,19 @@ const configSchema = z.object({
   EDGE_IPV4: csv,
   /** Where the gateway reaches a container's tagging servers. {id} is replaced with the container id. */
   TAGGING_UPSTREAM_TEMPLATE: z.string().default('http://tagging.ctr-{id}.svc.cluster.local:8080'),
+  /** Encrypts two-step verification keys in the database. Defaults to a key derived from ADMIN_API_KEY. */
+  SECRETS_KEY: optionalString,
   /** SMTP server for password reset emails, e.g. smtps://user:password@smtp.example.com:465. */
   SMTP_URL: optionalString,
-  /** Sender of those emails, e.g. "Tracking Platform <no-reply@example.com>". */
+  /** Sender of those emails, e.g. "OpenTrack <no-reply@example.com>". */
   MAIL_FROM: optionalString,
   /** The dashboard's public address, for links in emails. */
   DASHBOARD_URL: z.url().default('http://localhost:3100'),
+  /** New accounts wait for a super-admin's approval before they can use the dashboard. */
+  REQUIRE_APPROVAL: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
   /** Comma-separated addresses that see every workspace, once they sign in with Google. */
   SUPER_ADMIN_EMAILS: csv,
   USAGE_ROLLUP_MS: z.coerce.number().int().min(10_000).default(60_000),

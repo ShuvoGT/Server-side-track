@@ -9,11 +9,13 @@ import {
   createWorkspace,
   deleteContainer,
   deleteDomain,
+  deleteWorkspace,
   login,
   renameWorkspace,
   requestPasswordReset,
   resetPassword,
   signUp,
+  verifyTwoFactor,
   provisionAgain,
   regenerateLoaderPaths,
   rotateWebhookSecret,
@@ -69,6 +71,30 @@ export function LoginForm({ next }: { next: string }) {
       </div>
       {state.error && <Alert tone="critical">{state.error}</Alert>}
       <SubmitButton pending="Signing in…">Sign in</SubmitButton>
+    </form>
+  );
+}
+
+export function TwoFactorSignInForm() {
+  const [state, action] = useActionState(verifyTwoFactor, {});
+  return (
+    <form action={action} className="stack">
+      <div className="field">
+        <label htmlFor="code">Code</label>
+        <input
+          id="code"
+          name="code"
+          className="input mono code-input"
+          inputMode="numeric"
+          autoComplete="one-time-code"
+          placeholder="123456"
+          autoFocus
+          required
+        />
+        <span className="hint">Lost your phone? Enter a recovery code (like k7m2-9xqp) instead.</span>
+      </div>
+      {state.error && <Alert tone="critical">{state.error}</Alert>}
+      <SubmitButton pending="Checking…">Verify</SubmitButton>
     </form>
   );
 }
@@ -135,7 +161,7 @@ export function ResetPasswordForm({ token }: { token: string }) {
   );
 }
 
-export function SignUpForm() {
+export function SignUpForm({ countries }: { countries: { code: string; dial: string; name: string }[] }) {
   const [state, action] = useActionState(signUp, {});
   return (
     <form action={action} className="stack">
@@ -161,6 +187,37 @@ export function SignUpForm() {
           defaultValue={state.values?.email}
           required
         />
+      </div>
+      <div className="phone-row">
+        <div className="field">
+          <label htmlFor="phoneCountry">Country</label>
+          <select
+            id="phoneCountry"
+            name="phoneCountry"
+            className="select"
+            defaultValue={state.values?.phoneCountry || 'BD'}
+          >
+            {countries.map((c) => (
+              <option key={c.code} value={c.code}>
+                {c.code} +{c.dial}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="field">
+          <label htmlFor="phone">Phone number</label>
+          <input
+            id="phone"
+            name="phone"
+            className="input"
+            inputMode="tel"
+            autoComplete="tel-national"
+            placeholder="1711421236"
+            pattern="[0-9 ()+\-]{4,20}"
+            defaultValue={state.values?.phone}
+            required
+          />
+        </div>
       </div>
       <div className="field">
         <label htmlFor="password">Password</label>
@@ -233,6 +290,26 @@ export function RenameWorkspaceForm({ workspaceId, name }: { workspaceId: string
   );
 }
 
+export function DeleteWorkspaceForm({ workspaceId, name }: { workspaceId: string; name: string }) {
+  const [state, action] = useActionState(deleteWorkspace.bind(null, workspaceId, name), {});
+  return (
+    <form action={action} className="stack" style={{ gap: 10 }}>
+      <div className="field">
+        <label htmlFor="confirm-ws">
+          Type <strong>{name}</strong> to confirm
+        </label>
+        <input id="confirm-ws" name="confirm" className="input" autoComplete="off" required />
+      </div>
+      <Feedback state={state} />
+      <div>
+        <SubmitButton pending="Deleting…" className="btn btn-danger">
+          Delete workspace
+        </SubmitButton>
+      </div>
+    </form>
+  );
+}
+
 export function AddMemberForm({ workspaceId }: { workspaceId: string }) {
   const [state, action] = useActionState(addMember.bind(null, workspaceId), {});
   return (
@@ -270,12 +347,14 @@ export function InlineAction({
   pending,
   confirm,
   danger,
+  primary,
 }: {
   action: (prev: ActionState) => Promise<ActionState>;
   label: string;
   pending: string;
   confirm?: string;
   danger?: boolean;
+  primary?: boolean;
 }) {
   const [state, run] = useActionState(action, {});
   return (
@@ -286,7 +365,10 @@ export function InlineAction({
       }}
       className="inline-action"
     >
-      <SubmitButton pending={pending} className={`btn btn-sm ${danger ? 'btn-danger' : ''}`}>
+      <SubmitButton
+        pending={pending}
+        className={`btn btn-sm ${danger ? 'btn-danger' : primary ? 'btn-primary' : ''}`}
+      >
         {label}
       </SubmitButton>
       {state.error && <span className="small inline-error">{state.error}</span>}

@@ -1,13 +1,14 @@
 import { AddDomainForm, DomainActions } from '@/components/forms';
 import { Alert, DomainStatusBadge, EmptyState, formatDateTime, Icon } from '@/components/ui';
 import { api } from '@/lib/api';
-import { getContainer } from '@/lib/data';
+import { getContainer, getMe } from '@/lib/data';
 
 export const metadata = { title: 'Domains' };
 
 export default async function DomainsPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const [container, platform] = await Promise.all([getContainer(id), api.platform()]);
+  const [container, platform, { user }] = await Promise.all([getContainer(id), api.platform(), getMe()]);
+  const tz = user.timezone;
 
   return (
     <div className="stack">
@@ -83,11 +84,11 @@ export default async function DomainsPage({ params }: { params: Promise<{ id: st
               )}
               <dl className="kv small">
                 <dt>Added</dt>
-                <dd>{formatDateTime(domain.createdAt)}</dd>
+                <dd>{formatDateTime(domain.createdAt, tz)}</dd>
                 <dt>Verified</dt>
-                <dd>{formatDateTime(domain.verifiedAt)}</dd>
+                <dd>{formatDateTime(domain.verifiedAt, tz)}</dd>
                 <dt>Last DNS check</dt>
-                <dd>{formatDateTime(domain.lastCheckedAt)}</dd>
+                <dd>{formatDateTime(domain.lastCheckedAt, tz)}</dd>
               </dl>
             </div>
           </div>

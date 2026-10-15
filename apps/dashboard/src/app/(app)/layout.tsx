@@ -3,6 +3,7 @@ import { logout } from '@/app/actions';
 import { NavLink } from '@/components/client';
 import { ThemeToggle } from '@/components/theme';
 import { WorkspaceSwitcher } from '@/components/WorkspaceSwitcher';
+import { api } from '@/lib/api';
 import { currentWorkspace, getMe } from '@/lib/data';
 import { requireSession } from '@/lib/session';
 
@@ -25,13 +26,22 @@ const navIcon = (d: string) => (
 export default async function AppLayout({ children }: { children: ReactNode }) {
   await requireSession();
   const [{ user, workspaces }, workspace] = await Promise.all([getMe(), currentWorkspace()]);
+  const pendingCount = user.superAdmin
+    ? (await api.allUsers().catch(() => [])).filter((u) => u.status === 'pending').length
+    : 0;
+  const pendingBadge =
+    pendingCount > 0 ? (
+      <span className="nav-count" title={`${pendingCount} account request${pendingCount === 1 ? '' : 's'}`}>
+        {pendingCount}
+      </span>
+    ) : null;
   return (
     <div className="shell">
       <aside className="sidebar">
         <div className="brand">
-          <span className="brand-mark">S</span>
+          <span className="brand-mark">O</span>
           <div>
-            Tracking Platform
+            OpenTrack
             <small>Server-side tagging</small>
           </div>
         </div>
@@ -50,7 +60,23 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
               'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm13 10v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8',
             )}
             Members
+            {pendingBadge}
           </NavLink>
+          <NavLink href="/settings">
+            {navIcon(
+              'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm7.4-3a7.4 7.4 0 0 0-.1-1.3l2-1.6-2-3.4-2.4 1a7.6 7.6 0 0 0-2.2-1.3L14.4 3h-4l-.4 2.4a7.6 7.6 0 0 0-2.2 1.3l-2.4-1-2 3.4 2 1.6a7.4 7.4 0 0 0 0 2.6l-2 1.6 2 3.4 2.4-1a7.6 7.6 0 0 0 2.2 1.3l.4 2.4h4l.4-2.4a7.6 7.6 0 0 0 2.2-1.3l2.4 1 2-3.4-2-1.6c.1-.4.1-.9.1-1.3Z',
+            )}
+            Settings
+          </NavLink>
+          {user.superAdmin && (
+            <NavLink href="/admin/users">
+              {navIcon(
+                'M12 2 4 5v6c0 5 3.4 9.3 8 11 4.6-1.7 8-6 8-11V5l-8-3Zm0 7a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z',
+              )}
+              All users
+              {pendingBadge}
+            </NavLink>
+          )}
         </nav>
         <div className="sidebar-foot">
           <div className="me">

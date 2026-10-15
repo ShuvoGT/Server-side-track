@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { UsageChart, type ChartPoint } from '@/components/UsageChart';
 import { formatNumber } from '@/components/ui';
 import { api } from '@/lib/api';
-import { getContainer } from '@/lib/data';
+import { getContainer, getMe } from '@/lib/data';
 import type { UsageCounts } from '@/lib/types';
 
 export const metadata = { title: 'Usage' };
@@ -15,11 +15,6 @@ const RANGES = {
 type RangeKey = keyof typeof RANGES;
 
 const HOUR = 3600_000;
-const TZ = 'Asia/Dhaka';
-
-function fmt(date: Date, options: Intl.DateTimeFormatOptions): string {
-  return date.toLocaleString('en-GB', { timeZone: TZ, ...options });
-}
 
 export default async function UsagePage({
   params,
@@ -32,7 +27,9 @@ export default async function UsagePage({
   const { range: rawRange } = await searchParams;
   const rangeKey: RangeKey = rawRange && rawRange in RANGES ? (rawRange as RangeKey) : '24h';
   const range = RANGES[rangeKey];
-  const container = await getContainer(id);
+  const [container, { user }] = await Promise.all([getContainer(id), getMe()]);
+  const fmt = (date: Date, options: Intl.DateTimeFormatOptions) =>
+    date.toLocaleString('en-GB', { timeZone: user.timezone, ...options });
 
   // Buckets aligned to whole hours, ending with the current (partial) hour.
   const end = Math.floor(Date.now() / HOUR) * HOUR + HOUR;
@@ -77,7 +74,9 @@ export default async function UsagePage({
   return (
     <div className="stack">
       <div className="row" style={{ justifyContent: 'space-between' }}>
-        <p className="text-2">Request counts for the last {range.label} (times in Dhaka time).</p>
+        <p className="text-2">
+          Request counts for the last {range.label} (times in {user.timezone}).
+        </p>
         <nav className="segmented" aria-label="Time range">
           {(Object.keys(RANGES) as RangeKey[]).map((key) => (
             <Link key={key} href={`?range=${key}`} aria-current={key === rangeKey ? 'true' : undefined}>

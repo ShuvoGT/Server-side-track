@@ -5,7 +5,16 @@ import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { api, ApiError } from '@/lib/api';
 import { currentWorkspace } from '@/lib/data';
-import { createSession, destroySession, requireSession, selectWorkspace } from '@/lib/session';
+import QRCode from 'qrcode';
+import {
+  clearPendingSignIn,
+  createSession,
+  destroySession,
+  getPendingSignIn,
+  requireSession,
+  selectWorkspace,
+  startPendingSignIn,
+} from '@/lib/session';
 import type { Me, PowerUps, Role } from '@/lib/types';
 
 export interface ActionState {
@@ -17,6 +26,11 @@ export interface ActionState {
   containerId?: string;
   /** Typed values to show again after a failed submit (React resets the form). */
   values?: Record<string, string>;
+  /** Two-step setup: the key to scan, as an SVG QR code and as text. */
+  qrSvg?: string;
+  totpSecret?: string;
+  /** Shown once, right after two-step verification is turned on. */
+  recoveryCodes?: string[];
 }
 
 async function guarded(run: () => Promise<ActionState>): Promise<ActionState> {
@@ -42,6 +56,16 @@ async function clientIp(): Promise<string | undefined> {
 }
 
 async function startSession(me: Me, next: string): Promise<never> {
+  // A new account waits for a super-admin: it gets a session, but only for the waiting page.
+  if (me.user.status !== 'active') {
+    await createSession(me.user.id);
+    redirect('/pending');
+  }
+  // With two-step verification on, the password or Google step only earns a short wait for the code.
+  if (me.user.twoFactorEnabled) {
+    await startPendingSignIn(me.user.id, safeNext(next));
+    redirect('/login/verify');
+  }
   await createSession(me.user.id);
   const own = me.workspaces.find((w) => w.role === 'owner') ?? me.workspaces[0];
   if (own) await selectWorkspace(own.id);
@@ -66,13 +90,26 @@ export async function login(_prev: ActionState, form: FormData): Promise<ActionS
 export async function signUp(_prev: ActionState, form: FormData): Promise<ActionState> {
   const email = text(form, 'email');
   const password = String(form.get('password') ?? '');
-  const values = { email, name: text(form, 'name') };
+  const values = {
+    email,
+    name: text(form, 'name'),
+    phoneCountry: text(form, 'phoneCountry'),
+    phone: text(form, 'phone'),
+  };
   if (!email) return { error: 'Enter your email address.', values };
+  if (!/^[0-9 ()+-]{4,20}$/.test(values.phone))
+    return { error: 'Enter your phone number, digits only (e.g. 1711421236).', values };
   if (password.length < 8) return { error: 'Use a password of at least 8 characters.', values };
   if (password !== String(form.get('confirm') ?? '')) return { error: 'The two passwords differ.', values };
   let me: Me;
   try {
-    me = await api.signUp({ email, password, name: values.name });
+    me = await api.signUp({
+      email,
+      password,
+      name: values.name,
+      phoneCountry: values.phoneCountry || undefined,
+      phone: values.phone,
+    });
   } catch (error) {
     if (error instanceof ApiError)
       return {
@@ -114,6 +151,92 @@ export async function resetPassword(token: string, _prev: ActionState, form: For
   return startSession(me, '/');
 }
 
+export async function verifyTwoFactor(_prev: ActionState, form: FormData): Promise<ActionState> {
+  const pending = await getPendingSignIn();
+  if (!pending) redirect('/login?error=two_factor_expired');
+  const code = text(form, 'code');
+  if (!code) return { error: 'Enter the 6-digit code from your authenticator app.' };
+  let me: Me;
+  try {
+    me = await api.verifySecondFactor(pending.userId, code);
+  } catch (error) {
+    if (error instanceof ApiError) return { error: error.message };
+    throw error;
+  }
+  await clearPendingSignIn();
+  await createSession(me.user.id);
+  const own = me.workspaces.find((w) => w.role === 'owner') ?? me.workspaces[0];
+  if (own) await selectWorkspace(own.id);
+  redirect(safeNext(pending.next));
+}
+
+// Account settings
+
+export async function saveProfile(_prev: ActionState, form: FormData): Promise<ActionState> {
+  return guarded(async () => {
+    const name = text(form, 'name');
+    const phone = text(form, 'phone');
+    if (!name) return { error: 'Your name cannot be empty.' };
+    await api.updateProfile({
+      name,
+      phoneCountry: text(form, 'phoneCountry') || null,
+      phone: phone || null,
+    });
+    revalidatePath('/', 'layout');
+    return { ok: true, message: 'Profile saved.' };
+  });
+}
+
+export async function savePreferences(_prev: ActionState, form: FormData): Promise<ActionState> {
+  return guarded(async () => {
+    await api.updateProfile({ currency: text(form, 'currency'), timezone: text(form, 'timezone') });
+    revalidatePath('/', 'layout');
+    return { ok: true, message: 'Preferences saved. Dates and times now use your time zone.' };
+  });
+}
+
+export async function changePassword(_prev: ActionState, form: FormData): Promise<ActionState> {
+  return guarded(async () => {
+    const current = String(form.get('currentPassword') ?? '');
+    const next = String(form.get('newPassword') ?? '');
+    if (next.length < 8) return { error: 'Use a new password of at least 8 characters.' };
+    if (next !== String(form.get('confirm') ?? '')) return { error: 'The two new passwords differ.' };
+    const me = await api.changePassword(current || undefined, next);
+    // The change ended every older session, this one included: sign it in again.
+    await createSession(me.user.id);
+    revalidatePath('/', 'layout');
+    return { ok: true, message: 'Password updated. You were signed out on every other device.' };
+  });
+}
+
+export async function startTwoFactorSetup(_prev: ActionState): Promise<ActionState> {
+  return guarded(async () => {
+    const { secret, otpauthUrl } = await api.setUpTwoFactor();
+    const qrSvg = await QRCode.toString(otpauthUrl, { type: 'svg', margin: 1, errorCorrectionLevel: 'M' });
+    return { ok: true, qrSvg, totpSecret: secret };
+  });
+}
+
+export async function enableTwoFactor(_prev: ActionState, form: FormData): Promise<ActionState> {
+  return guarded(async () => {
+    const code = text(form, 'code');
+    if (!code) return { error: 'Enter the 6-digit code from the app.' };
+    const { recoveryCodes } = await api.enableTwoFactor(code);
+    revalidatePath('/settings');
+    return { ok: true, recoveryCodes };
+  });
+}
+
+export async function disableTwoFactor(_prev: ActionState, form: FormData): Promise<ActionState> {
+  return guarded(async () => {
+    const code = text(form, 'code');
+    if (!code) return { error: 'Enter a code from the app, or a recovery code.' };
+    await api.disableTwoFactor(code);
+    revalidatePath('/settings');
+    return { ok: true, message: 'Two-step verification is off.' };
+  });
+}
+
 export async function logout(): Promise<void> {
   await destroySession();
   redirect('/login');
@@ -148,6 +271,49 @@ export async function renameWorkspace(workspaceId: string, _prev: ActionState, f
     await api.renameWorkspace(workspaceId, name);
     revalidatePath('/', 'layout');
     return { ok: true, message: 'Saved.' };
+  });
+}
+
+export async function deleteWorkspace(
+  workspaceId: string,
+  expectedName: string,
+  _prev: ActionState,
+  form: FormData,
+): Promise<ActionState> {
+  const result = await guarded(async () => {
+    if (text(form, 'confirm') !== expectedName) return { error: `Type ${expectedName} to confirm.` };
+    await api.deleteWorkspace(workspaceId);
+    // Move to another workspace the user still has.
+    const remaining = (await api.workspaces()).find((w) => w.role === 'owner') ?? (await api.workspaces())[0];
+    if (remaining) await selectWorkspace(remaining.id);
+    revalidatePath('/', 'layout');
+    return { ok: true };
+  });
+  if (result.ok) redirect('/');
+  return result;
+}
+
+export async function approveUser(userId: string, _prev: ActionState): Promise<ActionState> {
+  return guarded(async () => {
+    const { emailed } = await api.approveUser(userId);
+    revalidatePath('/', 'layout');
+    return { ok: true, message: emailed ? 'Approved and emailed.' : 'Approved.' };
+  });
+}
+
+export async function deleteUser(userId: string, _prev: ActionState): Promise<ActionState> {
+  return guarded(async () => {
+    await api.deleteUser(userId);
+    revalidatePath('/', 'layout');
+    return { ok: true };
+  });
+}
+
+export async function rejectUser(userId: string, _prev: ActionState): Promise<ActionState> {
+  return guarded(async () => {
+    await api.rejectUser(userId);
+    revalidatePath('/', 'layout');
+    return { ok: true };
   });
 }
 

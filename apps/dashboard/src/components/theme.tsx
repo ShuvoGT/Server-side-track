@@ -6,18 +6,17 @@ type Theme = 'system' | 'light' | 'dark';
 const STORAGE_KEY = 'sst-theme';
 
 /**
- * Runs in <head> before the page paints, so a saved light or dark choice never flashes the other theme.
- * Kept as a string: it is inlined, not bundled.
+ * Runs in <head> before the page paints. Light unless the user chose dark, or system (follow the device);
+ * the server renders data-theme="light", so nothing flashes. Kept as a string: it is inlined, not bundled.
  */
-export const themeBootScript = `try{var t=localStorage.getItem('${STORAGE_KEY}');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t}catch(e){}`;
+export const themeBootScript = `try{var t=localStorage.getItem('${STORAGE_KEY}'),r=document.documentElement;if(t==='dark')r.dataset.theme='dark';else if(t==='system')delete r.dataset.theme;else r.dataset.theme='light'}catch(e){}`;
 
 function applyTheme(theme: Theme) {
   const root = document.documentElement;
   if (theme === 'system') delete root.dataset.theme;
   else root.dataset.theme = theme;
   try {
-    if (theme === 'system') localStorage.removeItem(STORAGE_KEY);
-    else localStorage.setItem(STORAGE_KEY, theme);
+    localStorage.setItem(STORAGE_KEY, theme);
   } catch {
     // Storage blocked (private window): the choice lasts until reload.
   }
@@ -32,11 +31,11 @@ const ICONS: Record<Theme, string> = {
 const LABELS: Record<Theme, string> = { light: 'Light', dark: 'Dark', system: 'System' };
 
 export function ThemeToggle() {
-  const [theme, setTheme] = useState<Theme>('system');
+  const [theme, setTheme] = useState<Theme>('light');
 
   useEffect(() => {
-    const saved = document.documentElement.dataset.theme;
-    if (saved === 'light' || saved === 'dark') setTheme(saved);
+    const current = document.documentElement.dataset.theme;
+    setTheme(current === 'light' || current === 'dark' ? current : 'system');
   }, []);
 
   return (
