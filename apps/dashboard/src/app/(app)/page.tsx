@@ -1,20 +1,20 @@
 import Link from 'next/link';
 import { Alert, ContainerStatusBadge, EmptyState, formatNumber, Icon } from '@/components/ui';
 import { api, ApiError } from '@/lib/api';
-import type { Container, Tenant } from '@/lib/types';
+import { currentWorkspace } from '@/lib/data';
+import type { Container } from '@/lib/types';
 
 export const metadata = { title: 'Containers' };
 
 export default async function ContainersPage() {
+  const workspace = await currentWorkspace();
   let containers: Container[];
-  let tenants: Tenant[];
   try {
-    [containers, tenants] = await Promise.all([api.containers(), api.tenants()]);
+    containers = await api.containers(workspace.id);
   } catch (error) {
     if (error instanceof ApiError) return <Alert tone="critical">{error.message}</Alert>;
     throw error;
   }
-  const tenantName = new Map(tenants.map((t) => [t.id, t.name]));
   const to = new Date();
   const from = new Date(to.getTime() - 86400_000);
   const usage = new Map(
@@ -37,7 +37,10 @@ export default async function ContainersPage() {
       <div className="page-head">
         <div>
           <h1>Containers</h1>
-          <p>One container per GTM server container. Each runs its own tagging and preview servers.</p>
+          <p>
+            In <strong>{workspace.name}</strong>. One container per GTM server container, each with its own
+            tagging and preview servers.
+          </p>
         </div>
         {containers.length > 0 && (
           <Link className="btn btn-primary" href="/containers/new">
@@ -84,7 +87,7 @@ export default async function ContainersPage() {
                         <strong>{c.name}</strong>
                       </Link>
                       <div className="small muted">
-                        {tenantName.get(c.tenantId) ?? '—'} · <span className="mono">{c.gtmContainerId}</span>
+                        <span className="mono">{c.gtmContainerId}</span>
                       </div>
                     </td>
                     <td>

@@ -1,8 +1,18 @@
 import { Prisma, PrismaClient } from '@prisma/client';
 import { powerUpsSchema } from '@sst/shared';
-import type { Container, Domain, UsageCounts } from './model.js';
+import type { Container, Domain, Invite, Membership, UsageCounts, User } from './model.js';
 import { importFromSqlite } from './sqliteImport.js';
-import { DuplicateHostnameError, type ContainerPatch, type DomainPatch, type Store } from './store.js';
+import {
+  DuplicateEmailError,
+  DuplicateHostnameError,
+  type ContainerPatch,
+  type DomainPatch,
+  type Store,
+  type UserPatch,
+} from './store.js';
+
+const isUniqueViolation = (error: unknown) =>
+  error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
 
 type ContainerRow = Prisma.ContainerGetPayload<object>;
 
@@ -43,6 +53,71 @@ export class PrismaStore implements Store {
   listTenants() {
     return this.db.tenant.findMany({ orderBy: { createdAt: 'asc' } });
   }
+  renameTenant(id: string, name: string) {
+    return this.db.tenant.update({ where: { id }, data: { name } });
+  }
+  listTenantsWithoutMembers() {
+    return this.db.tenant.findMany({ where: { memberships: { none: {} } }, orderBy: { createdAt: 'asc' } });
+  }
+
+  async createUser(user: User) {
+    try {
+      return await this.db.user.create({ data: user });
+    } catch (error) {
+      if (isUniqueViolation(error)) throw new DuplicateEmailError(user.email);
+      throw error;
+    }
+  }
+  getUser(id: string) {
+    return this.db.user.findUnique({ where: { id } });
+  }
+  getUserByEmail(email: string) {
+    return this.db.user.findUnique({ where: { email } });
+  }
+  getUserByGoogleSub(sub: string) {
+    return this.db.user.findUnique({ where: { googleSub: sub } });
+  }
+  updateUser(id: string, patch: UserPatch) {
+    return this.db.user.update({ where: { id }, data: patch });
+  }
+
+  async putMembership(membership: Membership) {
+    await this.db.membership.upsert({
+      where: { userId_tenantId: { userId: membership.userId, tenantId: membership.tenantId } },
+      create: membership,
+      update: { role: membership.role },
+    });
+  }
+  async deleteMembership(userId: string, tenantId: string) {
+    await this.db.membership.deleteMany({ where: { userId, tenantId } });
+  }
+  listUserMemberships(userId: string) {
+    return this.db.membership.findMany({ where: { userId }, orderBy: { createdAt: 'asc' } });
+  }
+  listTenantMembers(tenantId: string) {
+    return this.db.membership.findMany({
+      where: { tenantId },
+      include: { user: true },
+      orderBy: { createdAt: 'asc' },
+    });
+  }
+
+  putInvite(invite: Invite) {
+    return this.db.invite.upsert({
+      where: { tenantId_email: { tenantId: invite.tenantId, email: invite.email } },
+      create: invite,
+      update: { role: invite.role },
+    });
+  }
+  listInvites(tenantId: string) {
+    return this.db.invite.findMany({ where: { tenantId }, orderBy: { createdAt: 'asc' } });
+  }
+  listInvitesForEmail(email: string) {
+    return this.db.invite.findMany({ where: { email } });
+  }
+  async deleteInvite(id: string) {
+    await this.db.invite.deleteMany({ where: { id } });
+  }
 
   async createContainer(container: Container) {
     return toContainer(
@@ -74,9 +149,7 @@ export class PrismaStore implements Store {
     try {
       return await this.db.domain.create({ data: domain });
     } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-        throw new DuplicateHostnameError(domain.hostname);
-      }
+      if (isUniqueViolation(error)) throw new DuplicateHostnameError(domain.hostname);
       throw error;
     }
   }

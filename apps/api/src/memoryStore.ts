@@ -1,5 +1,12 @@
-import type { Container, Domain, Tenant, UsageCounts, UsageHour } from './model.js';
-import { DuplicateHostnameError, type ContainerPatch, type DomainPatch, type Store } from './store.js';
+import type { Container, Domain, Invite, Membership, Tenant, UsageCounts, UsageHour, User } from './model.js';
+import {
+  DuplicateEmailError,
+  DuplicateHostnameError,
+  type ContainerPatch,
+  type DomainPatch,
+  type Store,
+  type UserPatch,
+} from './store.js';
 
 function notFound(kind: string, id: string): Error {
   return new Error(`${kind} ${id} not found`);
@@ -10,6 +17,10 @@ export class MemoryStore implements Store {
   private containers = new Map<string, Container>();
   private domains = new Map<string, Domain>();
   private usage = new Map<string, UsageHour>();
+  private users = new Map<string, User>();
+  /** Keyed by `${userId}|${tenantId}`. */
+  private memberships = new Map<string, Membership>();
+  private invites = new Map<string, Invite>();
 
   async ping() {}
 
@@ -22,6 +33,74 @@ export class MemoryStore implements Store {
   }
   async listTenants() {
     return [...this.tenants.values()];
+  }
+  async renameTenant(id: string, name: string) {
+    const current = this.tenants.get(id);
+    if (!current) throw notFound('Tenant', id);
+    const next = { ...current, name };
+    this.tenants.set(id, next);
+    return next;
+  }
+  async listTenantsWithoutMembers() {
+    const used = new Set([...this.memberships.values()].map((m) => m.tenantId));
+    return [...this.tenants.values()].filter((t) => !used.has(t.id));
+  }
+
+  async createUser(user: User) {
+    if (await this.getUserByEmail(user.email)) throw new DuplicateEmailError(user.email);
+    this.users.set(user.id, user);
+    return user;
+  }
+  async getUser(id: string) {
+    return this.users.get(id) ?? null;
+  }
+  async getUserByEmail(email: string) {
+    return [...this.users.values()].find((u) => u.email === email) ?? null;
+  }
+  async getUserByGoogleSub(sub: string) {
+    return [...this.users.values()].find((u) => u.googleSub === sub) ?? null;
+  }
+  async updateUser(id: string, patch: UserPatch) {
+    const current = this.users.get(id);
+    if (!current) throw notFound('User', id);
+    const next = { ...current, ...patch };
+    this.users.set(id, next);
+    return next;
+  }
+
+  async putMembership(membership: Membership) {
+    const key = `${membership.userId}|${membership.tenantId}`;
+    const current = this.memberships.get(key);
+    this.memberships.set(key, current ? { ...current, role: membership.role } : membership);
+  }
+  async deleteMembership(userId: string, tenantId: string) {
+    this.memberships.delete(`${userId}|${tenantId}`);
+  }
+  async listUserMemberships(userId: string) {
+    return [...this.memberships.values()].filter((m) => m.userId === userId);
+  }
+  async listTenantMembers(tenantId: string) {
+    return [...this.memberships.values()]
+      .filter((m) => m.tenantId === tenantId)
+      .map((m) => ({ ...m, user: this.users.get(m.userId)! }));
+  }
+
+  async putInvite(invite: Invite) {
+    const current = [...this.invites.values()].find(
+      (i) => i.tenantId === invite.tenantId && i.email === invite.email,
+    );
+    const next = current ? { ...current, role: invite.role } : invite;
+    this.invites.set(next.id, next);
+    return next;
+  }
+  async listInvites(tenantId: string) {
+    return [...this.invites.values()].filter((i) => i.tenantId === tenantId);
+  }
+  async listInvitesForEmail(email: string) {
+    return [...this.invites.values()].filter((i) => i.email === email);
+  }
+  async deleteInvite(id: string) {
+    this.invites.delete(id);
   }
 
   async createContainer(container: Container) {

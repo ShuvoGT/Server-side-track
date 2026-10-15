@@ -10,7 +10,8 @@
 # - Each tracking domain (e.g. ss.travilo.io) is a custom domain on the gateway service in Openship, which issues
 #   its certificate. On a dedicated server, deploy/server does all of this automatically.
 #
-# Secrets (ADMIN_API_KEY, INTERNAL_API_TOKEN, DASHBOARD_PASSWORD, SESSION_SECRET, EDGE_HOSTNAME, POSTGRES_PASSWORD
+# Secrets (ADMIN_API_KEY, INTERNAL_API_TOKEN, SESSION_SECRET, GOOGLE_CLIENT_ID/SECRET, SUPER_ADMIN_EMAILS,
+# EDGE_HOSTNAME, POSTGRES_PASSWORD
 # and DATABASE_URL=postgresql://sst:<POSTGRES_PASSWORD>@postgres:5432/sst) are project environment variables in
 # Openship, and each tagging service's CONTAINER_CONFIG is a service variable; none are in this file. They are
 # deliberately not listed below: a `${VAR}` entry here is saved by Openship as an empty service value that
@@ -79,6 +80,7 @@ services:
     build: { context: ../.., dockerfile: apps/dashboard/Dockerfile }
     environment:
       API_URL: http://api:3000
+      DASHBOARD_URL: https://sst.ibos.agency
     expose: ['3100']
     depends_on: [api]
 

@@ -49,6 +49,7 @@ services:
       EDGE_HOSTNAME: ${EDGE_HOSTNAME:?set EDGE_HOSTNAME}
       EDGE_IPV4: ${EDGE_IPV4:-}
       TAGGING_UPSTREAM_TEMPLATE: http://sst-{id}-tagging:8080
+      SUPER_ADMIN_EMAILS: ${SUPER_ADMIN_EMAILS:-}
     volumes: [apidata:/app/data]
     depends_on:
       postgres: { condition: service_healthy }
@@ -74,8 +75,11 @@ services:
     environment:
       API_URL: http://api:3000
       ADMIN_API_KEY: ${ADMIN_API_KEY}
-      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:?run setup.sh first}
       SESSION_SECRET: ${SESSION_SECRET:?run setup.sh first}
+      DASHBOARD_URL: https://${DASHBOARD_HOST:?run setup.sh first}
+      # Optional: an OAuth client from Google Cloud Console, redirect URI https://<DASHBOARD_HOST>/api/auth/google/callback
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
     depends_on: [api]
 
   provisioner:

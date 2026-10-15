@@ -11,14 +11,19 @@ import {
   parseContainerConfig,
   powerUpsSchema,
 } from '@sst/shared';
+import { Accounts, MIN_PASSWORD_LENGTH, normalizeEmail, SignInLimiter } from './accounts.js';
 import {
   containerView,
   newId,
   newWebhookSecret,
   routeFor,
+  userView,
   type Container,
   type Domain,
+  type Role,
+  type Tenant,
   type UsageCounts,
+  type User,
 } from './model.js';
 import {
   checkDomainDns,
@@ -45,6 +50,21 @@ export interface ApiDeps {
   upstreamTemplate: string;
   logLevel?: string;
   collectDefaultMetrics?: boolean;
+  /** Addresses with access to every workspace, once Google has verified them. */
+  superAdminEmails?: string[];
+}
+
+/** The signed-in dashboard user a /v1 request acts for (x-sst-user), or null for the admin key alone. */
+interface Actor {
+  user: User;
+  superAdmin: boolean;
+  roles: Map<string, Role>;
+}
+
+declare module 'fastify' {
+  interface FastifyRequest {
+    actor: Actor | null;
+  }
 }
 
 const emptyCounts = (): UsageCounts => ({
@@ -87,7 +107,27 @@ function tokenMatches(header: string | undefined, expected: string): boolean {
 
 const DEFAULT_WEBHOOK_PATH = '/sst/woocommerce';
 
-const createTenantBody = z.object({ name: z.string().min(1).max(200) });
+const createTenantBody = z.object({ name: z.string().trim().min(1).max(200) });
+const signUpBody = z.object({
+  email: z.email().max(254),
+  password: z.string().min(MIN_PASSWORD_LENGTH).max(200),
+  name: z.string().max(100).default(''),
+});
+const signInBody = z.object({
+  email: z.string().max(254),
+  password: z.string().max(200),
+  /** The browser's address as the dashboard saw it, to limit guessing per client. */
+  clientIp: z.string().max(100).optional(),
+});
+const googleBody = z.object({
+  sub: z.string().min(1).max(255),
+  email: z.email().max(254),
+  emailVerified: z.boolean(),
+  name: z.string().max(100).default(''),
+});
+const roleSchema = z.enum(['owner', 'member']);
+const addMemberBody = z.object({ email: z.email().max(254), role: roleSchema.default('member') });
+const patchMemberBody = z.object({ role: roleSchema });
 const createContainerBody = z.object({
   tenantId: z.string(),
   name: z.string().min(1).max(200),
@@ -157,10 +197,47 @@ export function buildApi(deps: ApiDeps): { app: FastifyInstance; internal: Fasti
     return reply.code(500).send({ error: 'internal_error' });
   };
 
-  async function getContainerOr404(id: string): Promise<Container> {
+  const accounts = new Accounts(store, deps.superAdminEmails ?? []);
+  const signInLimiter = new SignInLimiter();
+
+  // A workspace the actor may not see answers 404 like a missing one, so ids cannot be probed.
+  const canSee = (req: FastifyRequest, tenantId: string) =>
+    !req.actor || req.actor.superAdmin || req.actor.roles.has(tenantId);
+  const canManage = (req: FastifyRequest, tenantId: string) =>
+    !req.actor || req.actor.superAdmin || req.actor.roles.get(tenantId) === 'owner';
+  const ownersOnly = () => new HttpError(403, 'forbidden', 'Only owners of this workspace can do that.');
+
+  /** Without a request this is the internal API's unrestricted lookup. */
+  async function getContainerOr404(id: string, req?: FastifyRequest): Promise<Container> {
     const container = await store.getContainer(id);
-    if (!container) throw notFound('Container');
+    if (!container || (req && !canSee(req, container.tenantId))) throw notFound('Container');
     return container;
+  }
+
+  async function getTenantOr404(id: string, req: FastifyRequest): Promise<Tenant> {
+    const tenant = await store.getTenant(id);
+    if (!tenant || !canSee(req, id)) throw notFound('Workspace');
+    return tenant;
+  }
+
+  /** The workspaces a user works in: their memberships, or every workspace for a super-admin. */
+  async function workspacesOf(user: User, superAdmin: boolean) {
+    const roles = new Map((await store.listUserMemberships(user.id)).map((m) => [m.tenantId, m.role]));
+    const all = await store.listTenants();
+    return all
+      .filter((t) => superAdmin || roles.has(t.id))
+      .map((t) => ({ ...t, role: roles.get(t.id) ?? null }));
+  }
+
+  async function sessionView(user: User) {
+    const superAdmin = accounts.isSuperAdmin(user);
+    return { user: userView(user, superAdmin), workspaces: await workspacesOf(user, superAdmin) };
+  }
+
+  async function assertNotLastOwner(tenantId: string, userId: string) {
+    const owners = (await store.listTenantMembers(tenantId)).filter((m) => m.role === 'owner');
+    if (owners.length === 1 && owners[0]!.userId === userId)
+      throw new HttpError(409, 'last_owner', 'A workspace needs at least one owner.');
   }
 
   /** Re-publishes the routes of a container's verified domains after any change that affects them. */
@@ -190,30 +267,183 @@ export function buildApi(deps: ApiDeps): { app: FastifyInstance; internal: Fasti
 
   app.register(
     async (v1) => {
+      v1.decorateRequest('actor', null);
       v1.addHook('onRequest', async (req) => {
         if (!tokenMatches(req.headers.authorization, deps.adminApiKey))
           throw new HttpError(401, 'unauthorized');
+        // The dashboard names the signed-in user; the API then limits the request to that user's workspaces.
+        const userId = req.headers['x-sst-user'];
+        if (typeof userId === 'string' && userId) {
+          const user = await store.getUser(userId);
+          if (!user) throw new HttpError(401, 'unknown_user');
+          const memberships = await store.listUserMemberships(user.id);
+          req.actor = {
+            user,
+            superAdmin: accounts.isSuperAdmin(user),
+            roles: new Map(memberships.map((m) => [m.tenantId, m.role])),
+          };
+        }
       });
 
       /** Settings the dashboard shows customers, e.g. in DNS instructions. */
       v1.get('/platform', async () => ({ edgeHostname: deps.edgeHostname, edgeIpv4: deps.edgeIpv4 }));
 
-      v1.get('/tenants', async () => store.listTenants());
+      // Accounts (called by the dashboard's sign-in pages, without x-sst-user)
+
+      v1.post('/auth/signup', async (req, reply) => {
+        const body = signUpBody.parse(req.body);
+        const user = await accounts.signUp(body);
+        if (user === 'email_taken')
+          throw new HttpError(
+            409,
+            'email_taken',
+            'An account with this email already exists. Sign in instead.',
+          );
+        return reply.code(201).send(await sessionView(user));
+      });
+
+      v1.post('/auth/signin', async (req) => {
+        const body = signInBody.parse(req.body);
+        const keys = [
+          `email:${normalizeEmail(body.email)}`,
+          ...(body.clientIp ? [`ip:${body.clientIp}`] : []),
+        ];
+        if (signInLimiter.blocked(...keys))
+          throw new HttpError(429, 'too_many_attempts', 'Too many failed sign-ins. Try again in 15 minutes.');
+        const user = await accounts.signIn(body.email, body.password);
+        if (!user) {
+          signInLimiter.fail(...keys);
+          throw new HttpError(401, 'invalid_credentials', 'Wrong email or password.');
+        }
+        signInLimiter.succeed(`email:${user.email}`);
+        return sessionView(user);
+      });
+
+      v1.post('/auth/google', async (req) => {
+        const user = await accounts.signInWithGoogle(googleBody.parse(req.body));
+        if (user === 'email_not_verified')
+          throw new HttpError(403, 'email_not_verified', 'Google has not verified this email address.');
+        return sessionView(user);
+      });
+
+      v1.get('/me', async (req) => {
+        if (!req.actor) throw new HttpError(400, 'no_user', 'Send x-sst-user.');
+        return sessionView(req.actor.user);
+      });
+
+      // Workspaces
+
+      v1.get('/tenants', async (req) => {
+        if (!req.actor) return store.listTenants();
+        return workspacesOf(req.actor.user, req.actor.superAdmin);
+      });
       v1.post('/tenants', async (req, reply) => {
         const body = createTenantBody.parse(req.body);
         const tenant = await store.createTenant({ id: newId('tnt'), name: body.name, createdAt: new Date() });
+        if (req.actor)
+          await store.putMembership({
+            userId: req.actor.user.id,
+            tenantId: tenant.id,
+            role: 'owner',
+            createdAt: new Date(),
+          });
         return reply.code(201).send(tenant);
       });
+      v1.patch<{ Params: { id: string } }>('/tenants/:id', async (req) => {
+        const tenant = await getTenantOr404(req.params.id, req);
+        if (!canManage(req, tenant.id)) throw ownersOnly();
+        return store.renameTenant(tenant.id, createTenantBody.parse(req.body).name);
+      });
+
+      v1.get<{ Params: { id: string } }>('/tenants/:id/members', async (req) => {
+        const tenant = await getTenantOr404(req.params.id, req);
+        const members = await store.listTenantMembers(tenant.id);
+        return {
+          members: members.map((m) => ({
+            userId: m.userId,
+            role: m.role,
+            createdAt: m.createdAt,
+            email: m.user.email,
+            name: m.user.name,
+            lastLoginAt: m.user.lastLoginAt,
+          })),
+          invites: await store.listInvites(tenant.id),
+        };
+      });
+
+      /** Adds a user whose address Google verified at once; anyone else gets an invite, accepted at sign-in. */
+      v1.post<{ Params: { id: string } }>('/tenants/:id/members', async (req, reply) => {
+        const tenant = await getTenantOr404(req.params.id, req);
+        if (!canManage(req, tenant.id)) throw ownersOnly();
+        const body = addMemberBody.parse(req.body);
+        const email = normalizeEmail(body.email);
+        const user = await store.getUserByEmail(email);
+        if (user?.emailVerified) {
+          await store.putMembership({
+            userId: user.id,
+            tenantId: tenant.id,
+            role: body.role,
+            createdAt: new Date(),
+          });
+          return reply.code(201).send({ added: { userId: user.id, email, role: body.role } });
+        }
+        const invite = await store.putInvite({
+          id: newId('inv'),
+          tenantId: tenant.id,
+          email,
+          role: body.role,
+          createdAt: new Date(),
+        });
+        return reply.code(201).send({ invited: invite });
+      });
+
+      v1.patch<{ Params: { id: string; userId: string } }>('/tenants/:id/members/:userId', async (req) => {
+        const tenant = await getTenantOr404(req.params.id, req);
+        if (!canManage(req, tenant.id)) throw ownersOnly();
+        const { role } = patchMemberBody.parse(req.body);
+        const member = (await store.listTenantMembers(tenant.id)).find((m) => m.userId === req.params.userId);
+        if (!member) throw notFound('Member');
+        if (role !== 'owner') await assertNotLastOwner(tenant.id, member.userId);
+        await store.putMembership({ ...member, role });
+        return { userId: member.userId, role };
+      });
+
+      /** Owners remove members; anyone may leave. */
+      v1.delete<{ Params: { id: string; userId: string } }>(
+        '/tenants/:id/members/:userId',
+        async (req, reply) => {
+          const tenant = await getTenantOr404(req.params.id, req);
+          if (req.actor?.user.id !== req.params.userId && !canManage(req, tenant.id)) throw ownersOnly();
+          await assertNotLastOwner(tenant.id, req.params.userId);
+          await store.deleteMembership(req.params.userId, tenant.id);
+          return reply.code(204).send();
+        },
+      );
+
+      v1.delete<{ Params: { id: string; inviteId: string } }>(
+        '/tenants/:id/invites/:inviteId',
+        async (req, reply) => {
+          const tenant = await getTenantOr404(req.params.id, req);
+          if (!canManage(req, tenant.id)) throw ownersOnly();
+          const invite = (await store.listInvites(tenant.id)).find((i) => i.id === req.params.inviteId);
+          if (!invite) throw notFound('Invite');
+          await store.deleteInvite(invite.id);
+          return reply.code(204).send();
+        },
+      );
+
+      // Containers
 
       v1.get('/containers', async (req) => {
         const { tenantId } = z.object({ tenantId: z.string().optional() }).parse(req.query);
-        const containers = await store.listContainers(tenantId);
+        if (tenantId) await getTenantOr404(tenantId, req);
+        const containers = (await store.listContainers(tenantId)).filter((c) => canSee(req, c.tenantId));
         return Promise.all(containers.map(async (c) => containerView(c, await store.listDomains(c.id))));
       });
 
       v1.post('/containers', async (req, reply) => {
         const body = createContainerBody.parse(req.body);
-        if (!(await store.getTenant(body.tenantId))) throw notFound('Tenant');
+        if (!(await store.getTenant(body.tenantId)) || !canSee(req, body.tenantId)) throw notFound('Tenant');
         const gtmContainerId = parseConfigOr400(body.containerConfig);
         const id = newId('c');
         const now = new Date();
@@ -240,13 +470,13 @@ export function buildApi(deps: ApiDeps): { app: FastifyInstance; internal: Fasti
       });
 
       v1.get<{ Params: { id: string } }>('/containers/:id', async (req) => {
-        const container = await getContainerOr404(req.params.id);
+        const container = await getContainerOr404(req.params.id, req);
         return containerView(container, await store.listDomains(container.id));
       });
 
       v1.patch<{ Params: { id: string } }>('/containers/:id', async (req) => {
         const body = patchContainerBody.parse(req.body);
-        const current = await getContainerOr404(req.params.id);
+        const current = await getContainerOr404(req.params.id, req);
         const powerUps = body.powerUps
           ? powerUpsSchema.parse(
               deepMerge(current.powerUps as unknown as Record<string, unknown>, body.powerUps),
@@ -274,7 +504,7 @@ export function buildApi(deps: ApiDeps): { app: FastifyInstance; internal: Fasti
 
       /** Runs provisioning again, e.g. after a failure or to restart the tagging servers on a newer image. */
       v1.post<{ Params: { id: string } }>('/containers/:id/provision', async (req, reply) => {
-        const current = await getContainerOr404(req.params.id);
+        const current = await getContainerOr404(req.params.id, req);
         if (current.status === 'deleting') throw new HttpError(409, 'container_deleting');
         const updated = await store.updateContainer(current.id, {
           status: 'provisioning',
@@ -285,7 +515,7 @@ export function buildApi(deps: ApiDeps): { app: FastifyInstance; internal: Fasti
       });
 
       v1.delete<{ Params: { id: string } }>('/containers/:id', async (req, reply) => {
-        const container = await getContainerOr404(req.params.id);
+        const container = await getContainerOr404(req.params.id, req);
         const domains = await store.listDomains(container.id);
         // Stop routing first, so the gateway answers 404 instead of proxying to servers being removed.
         await deps.publisher.remove(domains.map((d) => d.hostname));
@@ -295,14 +525,14 @@ export function buildApi(deps: ApiDeps): { app: FastifyInstance; internal: Fasti
       });
 
       v1.post<{ Params: { id: string } }>('/containers/:id/webhook-secret', async (req) => {
-        const container = await getContainerOr404(req.params.id);
+        const container = await getContainerOr404(req.params.id, req);
         const updated = await store.updateContainer(container.id, { webhookSecret: newWebhookSecret() });
         await publishContainer(updated);
         return { webhookPath: updated.webhookPath, webhookSecret: updated.webhookSecret };
       });
 
       v1.get<{ Params: { id: string } }>('/containers/:id/snippet', async (req) => {
-        const container = await getContainerOr404(req.params.id);
+        const container = await getContainerOr404(req.params.id, req);
         const domain = (await store.listDomains(container.id)).find((d) => d.status === 'verified');
         if (!domain) throw new HttpError(409, 'no_verified_domain', 'Verify a tracking domain first.');
         const route = routeFor(container, domain);
@@ -324,7 +554,7 @@ export function buildApi(deps: ApiDeps): { app: FastifyInstance; internal: Fasti
        * their GTM snippet: the old paths stop working at once.
        */
       v1.post<{ Params: { id: string } }>('/containers/:id/loader-paths', async (req) => {
-        const container = await getContainerOr404(req.params.id);
+        const container = await getContainerOr404(req.params.id, req);
         const updated = await store.updateContainer(container.id, {
           loaderGtmPath: generateLoaderPath(),
           loaderGtagPath: generateLoaderPath(),
@@ -334,7 +564,7 @@ export function buildApi(deps: ApiDeps): { app: FastifyInstance; internal: Fasti
       });
 
       v1.get<{ Params: { id: string } }>('/containers/:id/usage', async (req) => {
-        const container = await getContainerOr404(req.params.id);
+        const container = await getContainerOr404(req.params.id, req);
         const query = usageQuery.parse(req.query);
         const to = query.to ? new Date(query.to) : new Date();
         const from = query.from ? new Date(query.from) : new Date(to.getTime() - 7 * 86400_000);
@@ -357,7 +587,7 @@ export function buildApi(deps: ApiDeps): { app: FastifyInstance; internal: Fasti
       });
 
       v1.get<{ Params: { id: string } }>('/containers/:id/logs', async (req) => {
-        const container = await getContainerOr404(req.params.id);
+        const container = await getContainerOr404(req.params.id, req);
         const { from, to, ...query } = logsQuery.parse(req.query);
         const entries = await liveData.recentLogs(container.id, {
           ...query,
@@ -370,12 +600,12 @@ export function buildApi(deps: ApiDeps): { app: FastifyInstance; internal: Fasti
       // Domains
 
       v1.get<{ Params: { id: string } }>('/containers/:id/domains', async (req) => {
-        await getContainerOr404(req.params.id);
+        await getContainerOr404(req.params.id, req);
         return store.listDomains(req.params.id);
       });
 
       v1.post<{ Params: { id: string } }>('/containers/:id/domains', async (req, reply) => {
-        const container = await getContainerOr404(req.params.id);
+        const container = await getContainerOr404(req.params.id, req);
         const hostname = normalizeHost(createDomainBody.parse(req.body).hostname);
         if (!hostname) throw new HttpError(400, 'invalid_hostname');
         if (hostname === deps.edgeHostname)
@@ -408,6 +638,7 @@ export function buildApi(deps: ApiDeps): { app: FastifyInstance; internal: Fasti
       v1.post<{ Params: { id: string } }>('/domains/:id/verify', async (req) => {
         const domain = await store.getDomain(req.params.id);
         if (!domain) throw notFound('Domain');
+        const container = await getContainerOr404(domain.containerId, req);
         const check = await checkDomainDns(
           domain.hostname,
           deps.edgeHostname,
@@ -426,7 +657,6 @@ export function buildApi(deps: ApiDeps): { app: FastifyInstance; internal: Fasti
           lastCheckedAt: now,
           lastError: null,
         });
-        const container = await getContainerOr404(domain.containerId);
         await deps.publisher.publish([routeFor(container, updated)]);
         return { ...updated, check };
       });
@@ -434,6 +664,7 @@ export function buildApi(deps: ApiDeps): { app: FastifyInstance; internal: Fasti
       v1.delete<{ Params: { id: string } }>('/domains/:id', async (req, reply) => {
         const domain = await store.getDomain(req.params.id);
         if (!domain) throw notFound('Domain');
+        await getContainerOr404(domain.containerId, req);
         await store.deleteDomain(domain.id);
         await deps.publisher.remove([domain.hostname]);
         return reply.code(204).send();

@@ -117,6 +117,24 @@ and its tags call `www.google-analytics.com` and other vendor domains. Networks 
 tag domains to 0.0.0.0". Allow at least `googletagmanager.com`, `google-analytics.com`, `googleadservices.com`,
 `graph.facebook.com` and `business-api.tiktok.com` for the servers that run tagging servers.
 
+### Accounts and workspaces
+
+Anyone can create an account on the dashboard, with an email and password or with Google ("Continue with
+Google", shown when `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are set). Every account gets a workspace of its
+own; containers belong to a workspace, and its owners invite other people under **Members**. The API enforces
+this: the dashboard sends the signed-in user as `x-sst-user`, and every `/v1` request is limited to that user's
+workspaces (other workspaces' containers answer 404). Requests with the admin key alone keep full access.
+
+- An address counts as proven only when Google verified it. Invites and super-admin rights therefore apply after
+  a Google sign-in with that address; a password account cannot claim someone else's invite. Signing in with
+  Google to an account whose address nobody had proven drops its password, so whoever registered it first loses
+  access.
+- `SUPER_ADMIN_EMAILS` (API, comma-separated) see every workspace. On their first Google sign-in they become
+  owners of workspaces that have no members, such as those created before accounts existed.
+- Passwords are scrypt hashes; ten failed sign-ins for an address or client block it for 15 minutes.
+- Google OAuth client: Google Cloud Console › APIs & Services › Credentials › OAuth client ID (Web application),
+  redirect URI `<DASHBOARD_URL>/api/auth/google/callback`.
+
 ### Database: PostgreSQL
 
 The API keeps its configuration in PostgreSQL (`DATABASE_URL`, e.g. `postgresql://sst:PASSWORD@postgres:5432/sst`)
@@ -207,7 +225,7 @@ The gateway serves `/healthz`, `/readyz` and `/metrics` on its admin port (9090)
 | Data plane: power-ups v1                                 | Geo, user agent, bot filtering, cookie keeper, anonymizer done.                                                                                                                                                                                                                                         |
 | Control plane: data model and API                        | MVP done (`apps/api`), admin key auth only.                                                                                                                                                                                                                                                             |
 | Control plane: provisioning                              | Done (`apps/provisioner`): validate, deploy, wait for health, report Active with the upstream URL; roll back a new container that fails; delete. Changing the Container Config in the dashboard re-provisions. Custom-domain certificate checks are not part of it yet.                                 |
-| Control plane: dashboard                                 | Done (`apps/dashboard`): sign-in, containers, onboarding, domains with DNS steps, power-ups, usage chart, live request logs, settings; empty, loading and error states. One shared admin password for the internal MVP; per-user accounts come with the SaaS phase.                                     |
+| Control plane: dashboard                                 | Done (`apps/dashboard`): sign-in, containers, onboarding, domains with DNS steps, power-ups, usage chart, live request logs, settings; empty, loading and error states. Accounts with email/password and Google, workspaces with owners and members, super-admins.                                      |
 | Logging, monitoring, metering                            | Prometheus metrics, hourly usage roll-up and 7-day request logs done; Loki and alerts not done.                                                                                                                                                                                                         |
 | Integrations (GTM playbook, WooCommerce plugin, vendors) | Not started. The gateway's webhook endpoint and signing scheme are ready for the plugin.                                                                                                                                                                                                                |
 | Security, privacy, testing, operations, rollout          | Chapters are stubs in the guide. Already in place: namespace NetworkPolicy, timing-safe token checks, verified-only certificates, consent-aware cookie keeper, IP anonymization, CI (lint, build, test, image build).                                                                                   |
@@ -226,7 +244,7 @@ tagging and preview servers are services of the project.
 | `travilo-preview.ibos.agency` | `sst-chukjbhcigtx2-preview:8080` | GTM server Preview for travilo.io                            |
 | `pgadmin.ibos.agency`         | `pgadmin:80`                     | pgAdmin for the live PostgreSQL (login: Openship variables)  |
 
-Secrets (`ADMIN_API_KEY`, `INTERNAL_API_TOKEN`, `DASHBOARD_PASSWORD`, `SESSION_SECRET`, `POSTGRES_PASSWORD`,
+Secrets (`ADMIN_API_KEY`, `INTERNAL_API_TOKEN`, `SESSION_SECRET`, `GOOGLE_CLIENT_ID`/`_SECRET`, `SUPER_ADMIN_EMAILS`, `POSTGRES_PASSWORD`,
 `DATABASE_URL`) and `EDGE_HOSTNAME` / `EDGE_IPV4` are Openship project variables; each tagging service's `CONTAINER_CONFIG` is a service variable. None
 are in the repository. Deploys are folder uploads with the compose file at the archive root (build contexts
 rewritten from `../..` to `.`); redeploy only the services that changed, never `redis` or `postgres`.

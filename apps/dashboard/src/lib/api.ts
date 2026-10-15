@@ -1,15 +1,21 @@
 import 'server-only';
 import { env } from './env';
+import { getSession } from './session';
 import type {
   Container,
   DnsRecord,
   Domain,
+  Invite,
   LogsResponse,
+  Me,
+  Member,
   PowerUps,
+  Role,
   Snippet,
   Tenant,
   Usage,
   VerifyResult,
+  Workspace,
 } from './types';
 
 export class ApiError extends Error {
@@ -31,18 +37,22 @@ const MESSAGES: Record<string, string> = {
   no_verified_domain: 'Verify a tracking domain first.',
   not_found: 'Not found.',
   unauthorized: 'The dashboard is not authorized to call the API. Check ADMIN_API_KEY.',
+  unknown_user: 'Your account no longer exists. Sign in again.',
 };
 
 /**
  * Calls the control plane API with the admin key. Runs only on the server: the key never reaches the browser.
+ * The signed-in user goes along as x-sst-user, and the API limits the request to that user's workspaces.
  */
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const session = await getSession();
   let response: Response;
   try {
     response = await fetch(new URL(path, env().API_URL), {
       method,
       headers: {
         authorization: `Bearer ${env().ADMIN_API_KEY}`,
+        ...(session && { 'x-sst-user': session.userId }),
         ...(body !== undefined && { 'content-type': 'application/json' }),
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -73,12 +83,39 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   return data as T;
 }
 
+const ws = (id: string) => `/v1/tenants/${encodeURIComponent(id)}`;
+
 export const api = {
   platform: () => call<{ edgeHostname: string; edgeIpv4: string[] }>('GET', '/v1/platform'),
-  tenants: () => call<Tenant[]>('GET', '/v1/tenants'),
-  createTenant: (name: string) => call<Tenant>('POST', '/v1/tenants', { name }),
 
-  containers: () => call<Container[]>('GET', '/v1/containers'),
+  signUp: (input: { email: string; password: string; name: string }) =>
+    call<Me>('POST', '/v1/auth/signup', input),
+  signIn: (input: { email: string; password: string; clientIp?: string }) =>
+    call<Me>('POST', '/v1/auth/signin', input),
+  signInWithGoogle: (profile: { sub: string; email: string; emailVerified: boolean; name: string }) =>
+    call<Me>('POST', '/v1/auth/google', profile),
+  me: () => call<Me>('GET', '/v1/me'),
+
+  workspaces: () => call<Workspace[]>('GET', '/v1/tenants'),
+  createWorkspace: (name: string) => call<Tenant>('POST', '/v1/tenants', { name }),
+  renameWorkspace: (id: string, name: string) => call<Tenant>('PATCH', ws(id), { name }),
+  members: (id: string) => call<{ members: Member[]; invites: Invite[] }>('GET', `${ws(id)}/members`),
+  addMember: (id: string, email: string, role: Role) =>
+    call<{ added?: { email: string }; invited?: Invite }>('POST', `${ws(id)}/members`, { email, role }),
+  changeRole: (id: string, userId: string, role: Role) =>
+    call<{ userId: string; role: Role }>('PATCH', `${ws(id)}/members/${encodeURIComponent(userId)}`, {
+      role,
+    }),
+  removeMember: (id: string, userId: string) =>
+    call<void>('DELETE', `${ws(id)}/members/${encodeURIComponent(userId)}`),
+  cancelInvite: (id: string, inviteId: string) =>
+    call<void>('DELETE', `${ws(id)}/invites/${encodeURIComponent(inviteId)}`),
+
+  containers: (workspaceId?: string) =>
+    call<Container[]>(
+      'GET',
+      workspaceId ? `/v1/containers?tenantId=${encodeURIComponent(workspaceId)}` : '/v1/containers',
+    ),
   container: (id: string) => call<Container>('GET', `/v1/containers/${encodeURIComponent(id)}`),
   createContainer: (input: {
     tenantId: string;

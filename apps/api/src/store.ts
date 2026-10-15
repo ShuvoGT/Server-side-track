@@ -1,4 +1,4 @@
-import type { Container, Domain, Tenant, UsageCounts, UsageHour } from './model.js';
+import type { Container, Domain, Invite, Membership, Tenant, UsageCounts, UsageHour, User } from './model.js';
 
 export type ContainerPatch = Partial<
   Pick<
@@ -18,7 +18,12 @@ export type ContainerPatch = Partial<
 >;
 export type DomainPatch = Partial<Pick<Domain, 'status' | 'verifiedAt' | 'lastCheckedAt' | 'lastError'>>;
 
+export type UserPatch = Partial<
+  Pick<User, 'name' | 'passwordHash' | 'googleSub' | 'emailVerified' | 'lastLoginAt'>
+>;
+
 export class DuplicateHostnameError extends Error {}
+export class DuplicateEmailError extends Error {}
 
 /** Persistence for the control plane. PrismaStore is used in production; MemoryStore in tests and trials. */
 export interface Store {
@@ -27,6 +32,28 @@ export interface Store {
   createTenant(tenant: Tenant): Promise<Tenant>;
   getTenant(id: string): Promise<Tenant | null>;
   listTenants(): Promise<Tenant[]>;
+  renameTenant(id: string, name: string): Promise<Tenant>;
+  /** Workspaces nobody belongs to, e.g. created before user accounts existed. */
+  listTenantsWithoutMembers(): Promise<Tenant[]>;
+
+  /** Throws DuplicateEmailError if the address is taken. */
+  createUser(user: User): Promise<User>;
+  getUser(id: string): Promise<User | null>;
+  getUserByEmail(email: string): Promise<User | null>;
+  getUserByGoogleSub(sub: string): Promise<User | null>;
+  updateUser(id: string, patch: UserPatch): Promise<User>;
+
+  /** Adds the membership, or changes the role of an existing one. */
+  putMembership(membership: Membership): Promise<void>;
+  deleteMembership(userId: string, tenantId: string): Promise<void>;
+  listUserMemberships(userId: string): Promise<Membership[]>;
+  listTenantMembers(tenantId: string): Promise<(Membership & { user: User })[]>;
+
+  /** One invite per workspace and address: inviting again updates the role. */
+  putInvite(invite: Invite): Promise<Invite>;
+  listInvites(tenantId: string): Promise<Invite[]>;
+  listInvitesForEmail(email: string): Promise<Invite[]>;
+  deleteInvite(id: string): Promise<void>;
 
   createContainer(container: Container): Promise<Container>;
   getContainer(id: string): Promise<Container | null>;

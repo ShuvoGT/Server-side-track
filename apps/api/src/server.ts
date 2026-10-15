@@ -44,6 +44,7 @@ async function main() {
     edgeIpv4: config.EDGE_IPV4,
     upstreamTemplate: config.TAGGING_UPSTREAM_TEMPLATE,
     logLevel: config.LOG_LEVEL,
+    superAdminEmails: config.SUPER_ADMIN_EMAILS,
   });
   const logger = app.log;
   if (!redis) logger.warn('no REDIS_URL: routes are served to the gateway from the internal API only');

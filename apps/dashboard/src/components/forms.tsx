@@ -1,13 +1,17 @@
 'use client';
 
 import Link from 'next/link';
-import { useActionState, useState } from 'react';
+import { useActionState } from 'react';
 import {
   addDomain,
+  addMember,
   createContainer,
+  createWorkspace,
   deleteContainer,
   deleteDomain,
   login,
+  renameWorkspace,
+  signUp,
   provisionAgain,
   regenerateLoaderPaths,
   rotateWebhookSecret,
@@ -17,7 +21,7 @@ import {
   verifyDomain,
   type ActionState,
 } from '@/app/actions';
-import type { PowerUps, Tenant } from '@/lib/types';
+import type { PowerUps } from '@/lib/types';
 import { CodeBlock, CopyButton, SubmitButton } from './client';
 import { Alert } from './ui';
 
@@ -27,13 +31,34 @@ function Feedback({ state }: { state: ActionState }) {
   return null;
 }
 
-export function LoginForm() {
+export function LoginForm({ next }: { next: string }) {
   const [state, action] = useActionState(login, {});
   return (
     <form action={action} className="stack">
+      <input type="hidden" name="next" value={next} />
+      <div className="field">
+        <label htmlFor="email">Email</label>
+        <input
+          id="email"
+          name="email"
+          type="email"
+          className="input"
+          autoComplete="email"
+          defaultValue={state.values?.email}
+          autoFocus
+          required
+        />
+      </div>
       <div className="field">
         <label htmlFor="password">Password</label>
-        <input id="password" name="password" type="password" className="input" autoFocus required />
+        <input
+          id="password"
+          name="password"
+          type="password"
+          className="input"
+          autoComplete="current-password"
+          required
+        />
       </div>
       {state.error && <Alert tone="critical">{state.error}</Alert>}
       <SubmitButton pending="Signing in…">Sign in</SubmitButton>
@@ -41,9 +66,167 @@ export function LoginForm() {
   );
 }
 
-export function NewContainerForm({ tenants }: { tenants: Tenant[] }) {
+export function SignUpForm() {
+  const [state, action] = useActionState(signUp, {});
+  return (
+    <form action={action} className="stack">
+      <div className="field">
+        <label htmlFor="name">Your name</label>
+        <input
+          id="name"
+          name="name"
+          className="input"
+          autoComplete="name"
+          defaultValue={state.values?.name}
+          autoFocus
+        />
+      </div>
+      <div className="field">
+        <label htmlFor="email">Email</label>
+        <input
+          id="email"
+          name="email"
+          type="email"
+          className="input"
+          autoComplete="email"
+          defaultValue={state.values?.email}
+          required
+        />
+      </div>
+      <div className="field">
+        <label htmlFor="password">Password</label>
+        <input
+          id="password"
+          name="password"
+          type="password"
+          className="input"
+          autoComplete="new-password"
+          minLength={8}
+          required
+        />
+        <span className="hint">At least 8 characters.</span>
+      </div>
+      <div className="field">
+        <label htmlFor="confirm">Password again</label>
+        <input
+          id="confirm"
+          name="confirm"
+          type="password"
+          className="input"
+          autoComplete="new-password"
+          minLength={8}
+          required
+        />
+      </div>
+      {state.error && <Alert tone="critical">{state.error}</Alert>}
+      <SubmitButton pending="Creating your account…">Create account</SubmitButton>
+    </form>
+  );
+}
+
+export function CreateWorkspaceForm() {
+  const [state, action] = useActionState(createWorkspace, {});
+  return (
+    <form action={action} className="card">
+      <div className="card-body stack">
+        <div className="field">
+          <label htmlFor="name">Workspace name</label>
+          <input id="name" name="name" className="input" placeholder="Acme Ltd." autoFocus required />
+          <span className="hint">
+            Usually a company or a client. Containers and members belong to a workspace.
+          </span>
+        </div>
+        <Feedback state={state} />
+        <div className="row">
+          <SubmitButton pending="Creating…">Create workspace</SubmitButton>
+          <Link className="btn btn-ghost" href="/">
+            Cancel
+          </Link>
+        </div>
+      </div>
+    </form>
+  );
+}
+
+export function RenameWorkspaceForm({ workspaceId, name }: { workspaceId: string; name: string }) {
+  const [state, action] = useActionState(renameWorkspace.bind(null, workspaceId), {});
+  return (
+    <form action={action} className="stack" style={{ gap: 10 }}>
+      <div className="field">
+        <label htmlFor="ws-name">Name</label>
+        <input id="ws-name" name="name" className="input" defaultValue={name} required />
+      </div>
+      <Feedback state={state} />
+      <div>
+        <SubmitButton pending="Saving…">Save</SubmitButton>
+      </div>
+    </form>
+  );
+}
+
+export function AddMemberForm({ workspaceId }: { workspaceId: string }) {
+  const [state, action] = useActionState(addMember.bind(null, workspaceId), {});
+  return (
+    <form action={action} className="stack" style={{ gap: 10 }}>
+      <div className="member-invite">
+        <div className="field">
+          <label htmlFor="invite-email">Email</label>
+          <input
+            id="invite-email"
+            name="email"
+            type="email"
+            className="input"
+            placeholder="name@company.com"
+            required
+          />
+        </div>
+        <div className="field">
+          <label htmlFor="invite-role">Role</label>
+          <select id="invite-role" name="role" className="select" defaultValue="member">
+            <option value="member">Member: manage containers</option>
+            <option value="owner">Owner: also manage members</option>
+          </select>
+        </div>
+        <SubmitButton pending="Inviting…">Invite</SubmitButton>
+      </div>
+      <Feedback state={state} />
+    </form>
+  );
+}
+
+/** A one-click action (remove, change role, cancel invite) with its error shown in place. */
+export function InlineAction({
+  action,
+  label,
+  pending,
+  confirm,
+  danger,
+}: {
+  action: (prev: ActionState) => Promise<ActionState>;
+  label: string;
+  pending: string;
+  confirm?: string;
+  danger?: boolean;
+}) {
+  const [state, run] = useActionState(action, {});
+  return (
+    <form
+      action={run}
+      onSubmit={(e) => {
+        if (confirm && !window.confirm(confirm)) e.preventDefault();
+      }}
+      className="inline-action"
+    >
+      <SubmitButton pending={pending} className={`btn btn-sm ${danger ? 'btn-danger' : ''}`}>
+        {label}
+      </SubmitButton>
+      {state.error && <span className="small inline-error">{state.error}</span>}
+    </form>
+  );
+}
+
+export function NewContainerForm({ workspaceName }: { workspaceName: string }) {
   const [state, action] = useActionState(createContainer, {});
-  const [tenantId, setTenantId] = useState(tenants[0]?.id ?? '__new');
 
   if (state.ok && state.containerId) {
     return (
@@ -74,29 +257,9 @@ export function NewContainerForm({ tenants }: { tenants: Tenant[] }) {
   return (
     <form action={action} className="card">
       <div className="card-body stack">
-        <div className="field">
-          <label htmlFor="tenantId">Website or product</label>
-          <select
-            id="tenantId"
-            name="tenantId"
-            className="select"
-            value={tenantId}
-            onChange={(e) => setTenantId(e.target.value)}
-          >
-            {tenants.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
-              </option>
-            ))}
-            <option value="__new">+ New website or product…</option>
-          </select>
-        </div>
-        {tenantId === '__new' && (
-          <div className="field">
-            <label htmlFor="tenantName">New website or product name</label>
-            <input id="tenantName" name="tenantName" className="input" placeholder="iBOS ERP" required />
-          </div>
-        )}
+        <p className="small text-2">
+          In workspace <strong>{workspaceName}</strong>.
+        </p>
         <div className="field">
           <label htmlFor="name">Container name</label>
           <input id="name" name="name" className="input" placeholder="Shop – production" required />

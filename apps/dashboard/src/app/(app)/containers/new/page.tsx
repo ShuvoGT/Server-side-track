@@ -1,11 +1,11 @@
 import Link from 'next/link';
 import { NewContainerForm } from '@/components/forms';
-import { api } from '@/lib/api';
+import { currentWorkspace } from '@/lib/data';
 
 export const metadata = { title: 'New container' };
 
 export default async function NewContainerPage() {
-  const tenants = await api.tenants();
+  const workspace = await currentWorkspace();
   return (
     <div style={{ maxWidth: 720 }}>
       <div className="crumbs">
@@ -49,7 +49,7 @@ export default async function NewContainerPage() {
           </div>
         </li>
       </ol>
-      <NewContainerForm tenants={tenants} />
+      <NewContainerForm workspaceName={workspace.name} />
     </div>
   );
 }

@@ -63,6 +63,7 @@ function setup() {
     upstreamTemplate: 'http://tagging.ctr-{id}.svc.cluster.local:8080',
     logLevel: 'silent',
     collectDefaultMetrics: false,
+    superAdminEmails: ['boss@ibos.io'],
   });
   const auth = { authorization: `Bearer ${ADMIN}` };
   const call = async (method: 'GET' | 'POST' | 'PATCH' | 'DELETE', url: string, payload?: object) => {
@@ -383,5 +384,149 @@ describe('snippet, webhook secret, usage and provisioner status', () => {
     // Once deletion has started, late reports from an apply job are refused.
     await t.call('DELETE', `/v1/containers/${c.id}`);
     expect((await report({ status: 'active' })).statusCode).toBe(409);
+  });
+});
+
+describe('accounts and workspaces', () => {
+  const as = async (
+    userId: string,
+    method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+    url: string,
+    payload?: object,
+  ) => {
+    const res = await t.app.inject({
+      method,
+      url,
+      payload,
+      headers: { authorization: `Bearer ${ADMIN}`, 'x-sst-user': userId },
+    });
+    return { status: res.statusCode, body: res.body ? res.json() : undefined };
+  };
+  const signUp = async (email: string, password = 'correct horse') => {
+    const res = await t.call('POST', '/v1/auth/signup', { email, password, name: email.split('@')[0] });
+    expect(res.status).toBe(201);
+    return res.body as {
+      user: { id: string; superAdmin: boolean };
+      workspaces: { id: string; role: string }[];
+    };
+  };
+  const signIn = (email: string, password: string) => t.call('POST', '/v1/auth/signin', { email, password });
+  const google = (sub: string, email: string, emailVerified = true) =>
+    t.call('POST', '/v1/auth/google', { sub, email, emailVerified, name: 'G User' });
+  const newContainer = (userId: string, tenantId: string) =>
+    as(userId, 'POST', '/v1/containers', { tenantId, name: 'Site', containerConfig: CONFIG });
+
+  it('signs up with a workspace of its own, and signs in', async () => {
+    const a = await signUp('Ana@Example.com');
+    expect(a.workspaces).toHaveLength(1);
+    expect(a.workspaces[0]!.role).toBe('owner');
+    const again = await t.call('POST', '/v1/auth/signup', {
+      email: 'ana@example.com',
+      password: 'another pw',
+    });
+    expect(again.status).toBe(409);
+    const short = await t.call('POST', '/v1/auth/signup', { email: 'b@example.com', password: 'short' });
+    expect(short.status).toBe(400);
+
+    expect((await signIn('ana@example.com', 'nope nope')).status).toBe(401);
+    const ok = await signIn(' ANA@example.com', 'correct horse');
+    expect(ok.status).toBe(200);
+    expect(ok.body.user.id).toBe(a.user.id);
+    expect(ok.body.user.passwordHash).toBeUndefined();
+  });
+
+  it('blocks an address after ten failed sign-ins', async () => {
+    await signUp('c@example.com');
+    for (let i = 0; i < 10; i++) await signIn('c@example.com', 'wrong guess');
+    expect((await signIn('c@example.com', 'correct horse')).status).toBe(429);
+  });
+
+  it('keeps the containers of a workspace to its members', async () => {
+    const a = await signUp('a@example.com');
+    const b = await signUp('b@example.com');
+    const wsA = a.workspaces[0]!.id;
+    const created = await newContainer(a.user.id, wsA);
+    expect(created.status).toBe(201);
+    const id = created.body.id;
+
+    expect((await as(a.user.id, 'GET', `/v1/containers/${id}`)).status).toBe(200);
+    expect((await as(b.user.id, 'GET', `/v1/containers/${id}`)).status).toBe(404);
+    expect((await as(b.user.id, 'GET', `/v1/containers/${id}/logs`)).status).toBe(404);
+    expect(
+      (await as(b.user.id, 'POST', `/v1/containers/${id}/domains`, { hostname: 'x.b.com' })).status,
+    ).toBe(404);
+    expect((await as(b.user.id, 'DELETE', `/v1/containers/${id}`)).status).toBe(404);
+    expect((await as(b.user.id, 'GET', '/v1/containers')).body).toEqual([]);
+    expect((await as(b.user.id, 'GET', `/v1/containers?tenantId=${wsA}`)).status).toBe(404);
+    expect((await newContainer(b.user.id, wsA)).status).toBe(404);
+    const visible = (await as(b.user.id, 'GET', '/v1/tenants')).body as { id: string }[];
+    expect(visible.map((w) => w.id)).toEqual([b.workspaces[0]!.id]);
+
+    const domain = await as(a.user.id, 'POST', `/v1/containers/${id}/domains`, { hostname: 'sst.a.com' });
+    expect((await as(b.user.id, 'POST', `/v1/domains/${domain.body.id}/verify`)).status).toBe(404);
+    expect((await as(b.user.id, 'DELETE', `/v1/domains/${domain.body.id}`)).status).toBe(404);
+    expect(await t.store.getDomain(domain.body.id)).not.toBeNull();
+  });
+
+  it('links Google to an account by verified address, and takes over unproven ones', async () => {
+    const squatter = await signUp('victim@example.com', 'squatter pw');
+    const g = await google('g-1', 'victim@example.com');
+    expect(g.status).toBe(200);
+    expect(g.body.user.id).toBe(squatter.user.id);
+    expect(g.body.user.hasPassword).toBe(false);
+    expect((await signIn('victim@example.com', 'squatter pw')).status).toBe(401);
+
+    expect((await google('g-2', 'new@example.com', false)).status).toBe(403);
+    expect((await google('g-3', 'new@example.com')).body.workspaces).toHaveLength(1);
+  });
+
+  it('adds verified users at once and invites others, accepted at a Google sign-in', async () => {
+    const owner = await signUp('owner@example.com');
+    const ws = owner.workspaces[0]!.id;
+    const invited = await as(owner.user.id, 'POST', `/v1/tenants/${ws}/members`, {
+      email: 'Guest@Example.com',
+    });
+    expect(invited.body.invited.email).toBe('guest@example.com');
+
+    // A password sign-up cannot prove the address, so it does not get the invite.
+    const pw = await signUp('guest@example.com');
+    expect(pw.workspaces.map((w) => w.id)).not.toContain(ws);
+    const g = await google('g-guest', 'guest@example.com');
+    expect(g.body.workspaces.map((w: { id: string }) => w.id)).toContain(ws);
+
+    const members = await as(owner.user.id, 'GET', `/v1/tenants/${ws}/members`);
+    expect(members.body.members.map((m: { email: string }) => m.email).sort()).toEqual([
+      'guest@example.com',
+      'owner@example.com',
+    ]);
+    expect(members.body.invites).toEqual([]);
+
+    // Members cannot manage the workspace; the last owner cannot leave.
+    const guestId = g.body.user.id;
+    expect((await as(guestId, 'POST', `/v1/tenants/${ws}/members`, { email: 'x@example.com' })).status).toBe(
+      403,
+    );
+    expect((await as(owner.user.id, 'DELETE', `/v1/tenants/${ws}/members/${owner.user.id}`)).status).toBe(
+      409,
+    );
+    expect((await as(guestId, 'DELETE', `/v1/tenants/${ws}/members/${guestId}`)).status).toBe(204);
+  });
+
+  it('gives super-admins every workspace once Google verified them, and the ones nobody owned', async () => {
+    const legacy = await t.call('POST', '/v1/tenants', { name: 'From before accounts' });
+    const other = await signUp('someone@example.com');
+
+    const pw = await signUp('boss@ibos.io');
+    expect(pw.user.superAdmin).toBe(false);
+    expect(pw.workspaces.map((w) => w.id)).not.toContain(legacy.body.id);
+
+    const g = await google('g-boss', 'boss@ibos.io');
+    expect(g.body.user.superAdmin).toBe(true);
+    const workspaces = g.body.workspaces as { id: string; role: string | null }[];
+    expect(workspaces.map((w) => w.id)).toEqual(
+      expect.arrayContaining([legacy.body.id, other.workspaces[0]!.id]),
+    );
+    expect(workspaces.find((w) => w.id === legacy.body.id)!.role).toBe('owner');
+    expect((await newContainer(g.body.user.id, other.workspaces[0]!.id)).status).toBe(201);
   });
 });

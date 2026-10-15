@@ -10,11 +10,60 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+/// A workspace: the account that owns containers. Users reach it through memberships.
 model Tenant {
-  id         String      @id
-  name       String
-  createdAt  DateTime    @default(now())
-  containers Container[]
+  id          String       @id
+  name        String
+  createdAt   DateTime     @default(now())
+  containers  Container[]
+  memberships Membership[]
+  invites     Invite[]
+}
+
+/// A person who signs in to the dashboard, with a password, Google, or both.
+model User {
+  id            String       @id
+  /// Lower-case.
+  email         String       @unique
+  name          String
+  /// scrypt hash; null for Google-only accounts.
+  passwordHash  String?
+  googleSub     String?      @unique
+  /// True once Google confirmed the address. Invites and super-admin rights need a verified address.
+  emailVerified Boolean      @default(false)
+  createdAt     DateTime     @default(now())
+  lastLoginAt   DateTime?
+  memberships   Membership[]
+}
+
+enum Role {
+  owner
+  member
+}
+
+model Membership {
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  role      Role     @default(member)
+  createdAt DateTime @default(now())
+
+  @@id([userId, tenantId])
+  @@index([tenantId])
+}
+
+/// An invitation by email, turned into a membership when someone with that verified address signs in.
+model Invite {
+  id        String   @id
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  email     String
+  role      Role     @default(member)
+  createdAt DateTime @default(now())
+
+  @@unique([tenantId, email])
+  @@index([email])
 }
 
 enum ContainerStatus {

@@ -37,6 +37,8 @@ const configSchema = z.object({
   EDGE_IPV4: csv,
   /** Where the gateway reaches a container's tagging servers. {id} is replaced with the container id. */
   TAGGING_UPSTREAM_TEMPLATE: z.string().default('http://tagging.ctr-{id}.svc.cluster.local:8080'),
+  /** Comma-separated addresses that see every workspace, once they sign in with Google. */
+  SUPER_ADMIN_EMAILS: csv,
   USAGE_ROLLUP_MS: z.coerce.number().int().min(10_000).default(60_000),
   ROUTE_RESYNC_MS: z.coerce.number().int().min(10_000).default(300_000),
 });

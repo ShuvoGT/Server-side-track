@@ -1429,3 +1429,134 @@ pre {
   color: var(--critical);
   font-weight: 550;
 }
+
+/* ---------- Accounts ---------- */
+
+.login .auth-card {
+  max-width: 420px;
+  box-shadow: var(--shadow-lg);
+}
+.auth-title {
+  margin-bottom: 2px;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.google-btn {
+  width: 100%;
+  height: 40px;
+  gap: 10px;
+  color: var(--text);
+}
+.google-btn:hover {
+  text-decoration: none;
+}
+.or-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.or-divider::before,
+.or-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+.auth-switch {
+  text-align: center;
+}
+
+.ws-switcher {
+  display: grid;
+  gap: 4px;
+  padding: 0 4px;
+}
+.ws-label {
+  padding-left: 2px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.ws-switcher .select {
+  font-weight: 600;
+}
+
+.sidebar-foot {
+  flex-direction: column;
+  align-items: stretch;
+}
+.me {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px 0 4px;
+  border-top: 1px solid var(--border);
+}
+.me-text {
+  display: grid;
+  min-width: 0;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.35;
+}
+.me-text > * {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.super-badge {
+  justify-self: start;
+  margin-top: 4px;
+}
+.avatar {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent) 0%, var(--violet) 100%);
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.member {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.member-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.member-invite {
+  display: grid;
+  grid-template-columns: minmax(200px, 2fr) minmax(180px, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+}
+@media (max-width: 760px) {
+  .member-invite {
+    grid-template-columns: 1fr;
+  }
+}
+.inline-action {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+.inline-error {
+  max-width: 240px;
+  color: var(--critical);
+  text-align: right;
+}

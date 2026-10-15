@@ -10,6 +10,37 @@ export interface Tenant {
   createdAt: Date;
 }
 
+export type Role = 'owner' | 'member';
+
+export interface User {
+  id: string;
+  /** Lower-case. */
+  email: string;
+  name: string;
+  passwordHash: string | null;
+  googleSub: string | null;
+  /** Google confirmed the address. Invites and super-admin rights need it. */
+  emailVerified: boolean;
+  createdAt: Date;
+  lastLoginAt: Date | null;
+}
+
+export interface Membership {
+  userId: string;
+  tenantId: string;
+  role: Role;
+  createdAt: Date;
+}
+
+export interface Invite {
+  id: string;
+  tenantId: string;
+  /** Lower-case. */
+  email: string;
+  role: Role;
+  createdAt: Date;
+}
+
 export interface Container {
   id: string;
   tenantId: string;
@@ -59,7 +90,7 @@ const ID_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
  * Prefixed random ids. Container ids also name Kubernetes namespaces (ctr-<id>), so they stay lower-case
  * alphanumeric and short.
  */
-export function newId(prefix: 'tnt' | 'c' | 'dom'): string {
+export function newId(prefix: 'tnt' | 'c' | 'dom' | 'usr' | 'inv'): string {
   let id = '';
   for (const byte of randomBytes(12)) id += ID_ALPHABET[byte % ID_ALPHABET.length];
   return `${prefix}${id}`;
@@ -83,6 +114,20 @@ export function routeFor(container: Container, domain: Domain): ContainerRoute {
     },
     webhook: { path: container.webhookPath, secret: container.webhookSecret },
     powerUps: container.powerUps,
+  };
+}
+
+/** What the dashboard sees of a user: never the password hash. */
+export function userView(user: User, superAdmin: boolean) {
+  return {
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    emailVerified: user.emailVerified,
+    hasPassword: user.passwordHash !== null,
+    hasGoogle: user.googleSub !== null,
+    superAdmin,
+    createdAt: user.createdAt,
   };
 }
 

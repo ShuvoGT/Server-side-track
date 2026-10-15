@@ -11,6 +11,46 @@ export interface Tenant {
   createdAt: string;
 }
 
+export type Role = 'owner' | 'member';
+
+/** A workspace as one user sees it; role is null where only super-admin rights give access. */
+export interface Workspace extends Tenant {
+  role: Role | null;
+}
+
+export interface User {
+  id: string;
+  email: string;
+  name: string;
+  emailVerified: boolean;
+  hasPassword: boolean;
+  hasGoogle: boolean;
+  superAdmin: boolean;
+  createdAt: string;
+}
+
+export interface Me {
+  user: User;
+  workspaces: Workspace[];
+}
+
+export interface Member {
+  userId: string;
+  role: Role;
+  createdAt: string;
+  email: string;
+  name: string;
+  lastLoginAt: string | null;
+}
+
+export interface Invite {
+  id: string;
+  tenantId: string;
+  email: string;
+  role: Role;
+  createdAt: string;
+}
+
 export interface Domain {
   id: string;
   containerId: string;

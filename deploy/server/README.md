@@ -32,8 +32,9 @@ chmod +x setup.sh
 ./setup.sh edge.ibos.io tracking.ibos.io admin@ibos.io <server public IP>
 ```
 
-The first run generates `deploy/server/.env` (API keys, dashboard password, session secret) and prints the
-dashboard password. Keep `.env` private and backed up. Running `setup.sh` again later keeps the secrets and
+The first run generates `deploy/server/.env` (API keys, database password, session secret). Open the dashboard
+and create the first account with **Sign up**; for Google sign-in and super-admins add `GOOGLE_CLIENT_ID`,
+`GOOGLE_CLIENT_SECRET` and `SUPER_ADMIN_EMAILS` to `.env` and run `setup.sh` again. Keep `.env` private and backed up. Running `setup.sh` again later keeps the secrets and
 rebuilds, e.g. after `git pull`.
 
 ## 4. Add a website
