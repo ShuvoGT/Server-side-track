@@ -90,7 +90,8 @@ pnpm lint && pnpm format:check
 ### Provisioner
 
 The provisioner (`apps/provisioner`) takes jobs from the `provisioning` queue that the API writes whenever a
-container is created, gets a new Container Config, is restarted from the dashboard, or is deleted.
+container is created, gets a new Container Config, is restarted from the dashboard, gets its first verified
+tracking domain or loses one, or is deleted.
 
 - **apply**: reads the container from the API, starts Google's tagging and preview servers, waits until
   `/healthy` answers, then reports the container **Active** together with the address the gateway should use.
@@ -106,6 +107,15 @@ Drivers (`DRIVER`):
 | `kubernetes` | production (k3s)       | namespace `ctr-<id>` with secret, deployments, services, PDB, NetworkPolicy; RBAC in `deploy/k8s/provisioner-rbac.yaml` |
 | `docker`     | docker compose, dev    | containers `sst-<id>-tagging` and `sst-<id>-preview` on the local Docker engine                                         |
 | `external`   | Openship, shared hosts | nothing: the tagging servers are services of the deployment; only checks `/healthy` and reports Active or Failed        |
+| `openship`   | Openship (live)        | services `sst-<id>-tagging`, `sst-<id>-preview` and one nginx `sst-<id>-edge-<host>` per tracking domain, via its API   |
+
+The `openship` driver (`OPENSHIP_API_URL`, `OPENSHIP_TOKEN`, `OPENSHIP_ORGANIZATION_ID`, `OPENSHIP_PROJECT_ID`,
+`OPENSHIP_SERVER_ID`, optionally `OPENSHIP_HOSTS_IP` and `OPENSHIP_COMPOSE_PATH`) only touches services named after
+the container. Each one carries a hash of what was last applied (`/opentrack.spec`, since Openship masks environment
+values), so a service is patched and redeployed only when that changes, or when the tagging server does not answer.
+Openship deploys only from a source, so each deployment uploads a tiny folder with a compose file naming those
+services. A tracking domain that already has an Openship domain on another service (e.g. on the gateway) is left
+alone.
 
 `PREVIEW_URL_TEMPLATE` (e.g. `https://preview-{id}.example.com`) gives tagging servers the public HTTPS address of
 their preview server. Google's image exits on an internal `http://` preview URL, so without it GTM Preview is off
@@ -278,25 +288,26 @@ API (`apps/api`):
 | `SMTP_URL`, `MAIL_FROM`, `DASHBOARD_URL` | Email for resets, invites and approvals; links point at the dashboard       |
 | `SECRETS_KEY`                            | Encrypts two-step verification keys (default: derived from `ADMIN_API_KEY`) |
 | `SQLITE_IMPORT_FILE`                     | One-time import of an earlier SQLite database                               |
+| `DNS_SERVERS`                            | Resolvers for domain verification, e.g. `1.1.1.1,8.8.8.8` (default: system) |
 
 Dashboard (`apps/dashboard`): `API_URL`, `ADMIN_API_KEY`, `SESSION_SECRET` (signs session cookies),
 `DASHBOARD_URL`, and optionally `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` for Google sign-in.
 
 ## Implementation status against the guide
 
-| Guide chapter                                            | Status                                                                                                                                                                                                                                                                                                                                                      |
-| -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Foundations, Architecture                                | Followed: data plane / control plane split, gateway keeps working without the API, PostgreSQL + Redis, Caddy on-demand TLS with an ask endpoint, per-container namespaces, health/metrics endpoints, zod-validated config, Prisma migrations.                                                                                                               |
-| Data plane: tagging runtime                              | Done: the provisioner runs Google's image per container. Kubernetes: `ctr-<id>` namespace, 2 tagging replicas at 0.25/1 vCPU, one preview server, `/healthy` probes, PDB, NetworkPolicy (`deploy/k8s/container-template.yaml` documents the same objects). Docker: one tagging + one preview container.                                                     |
-| Data plane: edge gateway and custom loader               | Done (`apps/gateway`).                                                                                                                                                                                                                                                                                                                                      |
-| Data plane: custom domains and SSL                       | Subdomain + CNAME/A verification + on-demand certificates done. Same-origin path setup (Nginx/Cloudflare snippets) not yet written.                                                                                                                                                                                                                         |
-| Data plane: power-ups v1                                 | Geo, user agent, bot filtering, cookie keeper, anonymizer done.                                                                                                                                                                                                                                                                                             |
-| Control plane: data model and API                        | Done (`apps/api`): accounts, workspaces with owners and members, invites, approvals, containers, domains; every user request scoped to its workspaces.                                                                                                                                                                                                      |
-| Control plane: provisioning                              | Done (`apps/provisioner`): validate, deploy, wait for health, report Active with the upstream URL; roll back a new container that fails; delete. Changing the Container Config in the dashboard re-provisions. Custom-domain certificate checks are not part of it yet.                                                                                     |
-| Control plane: dashboard                                 | Done (`apps/dashboard`): sign-in, containers, onboarding, domains with DNS steps, power-ups, usage chart, live request logs, settings; empty, loading and error states. Accounts with email/password and Google, two-step verification, approvals, workspaces with owners and members, account settings (time zone used everywhere), super-admin user list. |
-| Logging, monitoring, metering                            | Prometheus metrics, hourly usage roll-up and 7-day request logs done; Loki and alerts not done.                                                                                                                                                                                                                                                             |
-| Integrations (GTM playbook, WooCommerce plugin, vendors) | Not started. The gateway's webhook endpoint and signing scheme are ready for the plugin.                                                                                                                                                                                                                                                                    |
-| Security, privacy, testing, operations, rollout          | Chapters are stubs in the guide. Already in place: namespace NetworkPolicy, timing-safe token checks, verified-only certificates, consent-aware cookie keeper, IP anonymization, scrypt passwords, sign-in limits, TOTP two-step verification with encrypted keys, session revocation on password change, CI (lint, build, test, image build).              |
+| Guide chapter                                            | Status                                                                                                                                                                                                                                                                                                                                                                                                |
+| -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Foundations, Architecture                                | Followed: data plane / control plane split, gateway keeps working without the API, PostgreSQL + Redis, Caddy on-demand TLS with an ask endpoint, per-container namespaces, health/metrics endpoints, zod-validated config, Prisma migrations.                                                                                                                                                         |
+| Data plane: tagging runtime                              | Done: the provisioner runs Google's image per container. Kubernetes: `ctr-<id>` namespace, 2 tagging replicas at 0.25/1 vCPU, one preview server, `/healthy` probes, PDB, NetworkPolicy (`deploy/k8s/container-template.yaml` documents the same objects). Docker: one tagging + one preview container.                                                                                               |
+| Data plane: edge gateway and custom loader               | Done (`apps/gateway`).                                                                                                                                                                                                                                                                                                                                                                                |
+| Data plane: custom domains and SSL                       | Subdomain + CNAME/A verification + on-demand certificates done. Same-origin path setup (Nginx/Cloudflare snippets) not yet written.                                                                                                                                                                                                                                                                   |
+| Data plane: power-ups v1                                 | Geo, user agent, bot filtering, cookie keeper, anonymizer done.                                                                                                                                                                                                                                                                                                                                       |
+| Control plane: data model and API                        | Done (`apps/api`): accounts, workspaces with owners and members, invites, approvals, containers, domains; every user request scoped to its workspaces.                                                                                                                                                                                                                                                |
+| Control plane: provisioning                              | Done (`apps/provisioner`): validate, deploy, wait for health, report Active with the upstream URL; roll back a new container that fails; delete. Changing the Container Config in the dashboard re-provisions. On Openship it also sets up each verified tracking domain on the edge. Custom-domain certificate checks are not part of it yet.                                                        |
+| Control plane: dashboard                                 | Done (`apps/dashboard`): sign-in, containers, onboarding, domains with DNS steps, power-ups, usage chart, live request logs, settings; empty, loading and error states. Accounts with email/password and Google, two-step verification, approvals, workspaces with owners and members, account settings (time zone used everywhere), super-admin user list.                                           |
+| Logging, monitoring, metering                            | Prometheus metrics, hourly usage roll-up and 7-day request logs done; Loki and alerts not done.                                                                                                                                                                                                                                                                                                       |
+| Integrations (GTM playbook, WooCommerce plugin, vendors) | Not started. The gateway's webhook endpoint and signing scheme are ready for the plugin.                                                                                                                                                                                                                                                                                                              |
+| Security, privacy, testing, operations, rollout          | Chapters are stubs in the guide. Already in place: namespace NetworkPolicy, timing-safe token checks, verified-only certificates, consent-aware cookie keeper, IP anonymization, scrypt passwords, sign-in limits, TOTP two-step verification with encrypted keys, session revocation on password change, gateway refuses host-like paths (`//host/…`, no SSRF), CI (lint, build, test, image build). |
 
 ## Live deployment: Openship
 
@@ -314,6 +325,7 @@ service per tracking domain (Openship keeps one custom domain per service port, 
 | `sst.ibos.agency`             | `dashboard:3100`                 | Dashboard; also the CNAME target (edge) for tracking domains |
 | `ss.travilo.io`               | `gateway:8080`                   | Tracking domain of travilo.io                                |
 | `travilo-preview.ibos.agency` | `sst-chukjbhcigtx2-preview:8080` | GTM server Preview for travilo.io                            |
+| `ss.aeroapps.io`              | `sst-ca62dr98lr5hh-edge-…:8080`  | Tracking domain of aeroapps.io (container `ca62dr98lr5hh`)   |
 | `pgadmin.ibos.agency`         | `pgadmin:80`                     | pgAdmin for the live PostgreSQL (login: Openship variables)  |
 | `<id>.preview.ibos.agency`    | `sst-<id>-preview:8080`          | GTM server Preview of each newer container (wildcard DNS)    |
 | any other tracking domain     | `sst-<id>-edge-<host>:8080`      | nginx proxy to `gateway:8080`, created by the provisioner    |
@@ -322,7 +334,8 @@ Secrets (`ADMIN_API_KEY`, `INTERNAL_API_TOKEN`, `SESSION_SECRET`, `GOOGLE_CLIENT
 `DATABASE_URL`, `OPENSHIP_TOKEN`) and `EDGE_HOSTNAME` / `EDGE_IPV4` are Openship project variables; the provisioner
 copies each container's `CONTAINER_CONFIG` from the database into its services. None are in the repository. The
 services the provisioner creates are not in the compose file, so a platform deploy must send only the services it
-changes. Deploys are folder uploads with the compose file at the archive root (build contexts
+changes: open a folder session, upload, scan, then `deployments/build/access` with `serviceIds`, without
+`projects/ensure`. Deploys are folder uploads with the compose file at the archive root (build contexts
 rewritten from `../..` to `.`); redeploy only the services that changed (usually `api` and `dashboard`), never
 `redis` or `postgres`. A dashboard tab opened before a deploy shows "The dashboard was updated" on its next action;
 reloading fixes it.
@@ -358,3 +371,14 @@ reloading fixes it.
   telemetry), which confuses Tag Assistant; use an incognito window.
 - An occasional `502 Tagging server error` on `/gtm/get_memo` is a slow GTM Preview poll (over the gateway's 30 s
   limit), not lost data. A 502 on `/g/collect` or a loader path is a real outage.
+
+### Lessons from the second website (aeroapps.io)
+
+- **Use a subdomain.** The apex `aeroapps.io` is the website itself; a tracking domain is `ss.aeroapps.io`.
+- **Openship keeps one custom domain per service port.** Adding a second domain to the gateway replaced
+  `ss.travilo.io` and took Travilo's tracking down until it was restored. Never change the gateway's domains; the
+  provisioner gives every further tracking domain its own proxy service.
+- **The office DNS also has an `aeroapps.io` zone**, so domain checks from ibos-34 use public resolvers
+  (`DNS_SERVERS`).
+- **Two containers run side by side.** GTM Preview is one session per browser: connecting Tag Assistant to one
+  server container ends the other's preview, not its tracking. Use separate browser profiles to debug both.
