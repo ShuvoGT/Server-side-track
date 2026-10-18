@@ -587,6 +587,36 @@ export function buildApi(deps: ApiDeps): { app: FastifyInstance; internal: Fasti
         }));
       });
 
+      /** Every workspace with its owners, member count and containers. Super-admins (or the admin key) only. */
+      v1.get('/admin/workspaces', async (req) => {
+        if (req.actor && !req.actor.superAdmin)
+          throw new HttpError(403, 'forbidden', 'Only super-admins can see all workspaces.');
+        const [tenants, memberships, users, containers] = await Promise.all([
+          store.listTenants(),
+          store.listAllMemberships(),
+          store.listUsers(),
+          store.listContainers(),
+        ]);
+        const userById = new Map(users.map((u) => [u.id, u]));
+        return tenants.map((t) => {
+          const members = memberships.filter((m) => m.tenantId === t.id);
+          return {
+            id: t.id,
+            name: t.name,
+            createdAt: t.createdAt,
+            memberCount: members.length,
+            owners: members
+              .filter((m) => m.role === 'owner')
+              .map((m) => userById.get(m.userId))
+              .filter((u): u is User => Boolean(u))
+              .map((u) => ({ id: u.id, name: u.name, email: u.email })),
+            containers: containers
+              .filter((c) => c.tenantId === t.id)
+              .map((c) => ({ id: c.id, name: c.name, status: c.status })),
+          };
+        });
+      });
+
       /** Approves a pending (or rejected) account and emails its owner. Super-admins only. */
       v1.post<{ Params: { id: string } }>('/admin/users/:id/approve', async (req) => {
         if (req.actor && !req.actor.superAdmin)
@@ -684,11 +714,20 @@ export function buildApi(deps: ApiDeps): { app: FastifyInstance; internal: Fasti
        * Deletes an empty workspace. Containers must be deleted first (that stops their tagging servers), and nobody
        * may delete their only workspace.
        */
+      /**
+       * Deletes a workspace. Owners can delete an empty one; super-admins (or the admin key) can pass
+       * ?containers=delete to remove its containers too: their routes stop at once and the provisioner removes
+       * their tagging servers in the background.
+       */
       v1.delete<{ Params: { id: string } }>('/tenants/:id', async (req, reply) => {
         const tenant = await getTenantOr404(req.params.id, req);
         if (!canManage(req, tenant.id)) throw ownersOnly();
+        const { containers: withContainers } = z
+          .object({ containers: z.enum(['delete']).optional() })
+          .parse(req.query);
         const containers = await store.listContainers(tenant.id);
-        if (containers.length > 0)
+        const superAdmin = !req.actor || req.actor.superAdmin;
+        if (containers.length > 0 && !(withContainers && superAdmin))
           throw new HttpError(
             409,
             'workspace_not_empty',
@@ -696,6 +735,13 @@ export function buildApi(deps: ApiDeps): { app: FastifyInstance; internal: Fasti
           );
         if (req.actor?.roles.has(tenant.id) && req.actor.roles.size === 1)
           throw new HttpError(409, 'last_workspace', 'This is your only workspace, so it cannot be deleted.');
+        for (const container of containers) {
+          const domains = await store.listDomains(container.id);
+          await deps.publisher.remove(domains.map((d) => d.hostname));
+          // The record goes now (with its domains and usage); the delete job still removes the servers.
+          await store.deleteContainer(container.id);
+          await deps.queue.enqueue({ type: 'delete', containerId: container.id });
+        }
         await store.deleteTenant(tenant.id);
         return reply.code(204).send();
       });

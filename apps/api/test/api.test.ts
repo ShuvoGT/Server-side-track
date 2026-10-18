@@ -748,7 +748,7 @@ describe('account approval', () => {
   beforeEach(() => {
     t = setup({ requireApproval: true });
   });
-  const as = async (userId: string, method: 'GET' | 'POST', url: string, payload?: object) => {
+  const as = async (userId: string, method: 'GET' | 'POST' | 'DELETE', url: string, payload?: object) => {
     const res = await t.app.inject({
       method,
       url,
@@ -868,6 +868,45 @@ describe('account approval', () => {
     // Never yourself, never a super-admin, never by someone else.
     expect((await as(boss.user.id, 'DELETE', `/v1/admin/users/${boss.user.id}`)).status).toBe(409);
     expect((await as(busy.user.id, 'DELETE', `/v1/admin/users/${boss.user.id}`)).status).toBe(403);
+  });
+
+  it('lets super-admins list every workspace and delete one with its containers', async () => {
+    const boss = (await google('g-boss2', 'boss@ibos.io')).body;
+    const client = (await google('g-client', 'client@example.com')).body;
+    await as(boss.user.id, 'POST', `/v1/admin/users/${client.user.id}/approve`);
+    const ws = (await as(client.user.id, 'GET', '/v1/me')).body.workspaces[0].id as string;
+    const c = await as(client.user.id, 'POST', '/v1/containers', {
+      tenantId: ws,
+      name: 'Site',
+      containerConfig: CONFIG,
+    });
+    const domain = await as(client.user.id, 'POST', `/v1/containers/${c.body.id}/domains`, {
+      hostname: 'sst.shop.com',
+    });
+    await as(client.user.id, 'POST', `/v1/domains/${domain.body.id}/verify`);
+    expect(t.publisher.routes.has('sst.shop.com')).toBe(true);
+
+    expect((await as(client.user.id, 'GET', '/v1/admin/workspaces')).status).toBe(403);
+    const list = await as(boss.user.id, 'GET', '/v1/admin/workspaces');
+    const row = list.body.find((w: { id: string }) => w.id === ws);
+    expect(row).toMatchObject({
+      memberCount: 1,
+      owners: [{ email: 'client@example.com' }],
+      containers: [{ id: c.body.id, name: 'Site' }],
+    });
+
+    // Owners still have to empty it first, and cannot force it.
+    await as(client.user.id, 'POST', '/v1/tenants', { name: 'Second' });
+    const refused = await as(client.user.id, 'DELETE', `/v1/tenants/${ws}?containers=delete`);
+    expect(refused.status).toBe(409);
+    expect(refused.body.error).toBe('workspace_not_empty');
+
+    const deleted = await as(boss.user.id, 'DELETE', `/v1/tenants/${ws}?containers=delete`);
+    expect(deleted.status).toBe(204);
+    expect(await t.store.getTenant(ws)).toBeNull();
+    expect(await t.store.getContainer(c.body.id)).toBeNull();
+    expect(t.publisher.routes.has('sst.shop.com')).toBe(false);
+    expect(t.queue.jobs.at(-1)).toEqual({ type: 'delete', containerId: c.body.id });
   });
 
   it('lets invited people straight in', async () => {

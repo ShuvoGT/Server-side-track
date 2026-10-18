@@ -293,6 +293,15 @@ export async function deleteWorkspace(
   return result;
 }
 
+/** Super-admins, from All workspaces: deletes a workspace and every container in it. */
+export async function adminDeleteWorkspace(workspaceId: string, _prev: ActionState): Promise<ActionState> {
+  return guarded(async () => {
+    await api.deleteWorkspaceWithContainers(workspaceId);
+    revalidatePath('/', 'layout');
+    return { ok: true };
+  });
+}
+
 export async function approveUser(userId: string, _prev: ActionState): Promise<ActionState> {
   return guarded(async () => {
     const { emailed } = await api.approveUser(userId);

@@ -77,6 +77,12 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
               {pendingBadge}
             </NavLink>
           )}
+          {user.superAdmin && (
+            <NavLink href="/admin/workspaces">
+              {navIcon('M3 7h18M3 12h18M3 17h18M7 3v4m10-4v4')}
+              All workspaces
+            </NavLink>
+          )}
         </nav>
         <div className="sidebar-foot">
           <div className="me">

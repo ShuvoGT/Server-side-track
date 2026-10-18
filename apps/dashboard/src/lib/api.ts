@@ -4,6 +4,7 @@ import { env } from './env';
 import { getSession } from './session';
 import type {
   AdminUser,
+  AdminWorkspace,
   Container,
   DnsRecord,
   Domain,
@@ -107,6 +108,9 @@ export const api = {
     call<Me>('POST', '/v1/auth/google', profile),
   me: () => call<Me>('GET', '/v1/me'),
   allUsers: () => call<AdminUser[]>('GET', '/v1/admin/users'),
+  allWorkspaces: () => call<AdminWorkspace[]>('GET', '/v1/admin/workspaces'),
+  /** Super-admins: deletes the workspace with its containers. */
+  deleteWorkspaceWithContainers: (id: string) => call<void>('DELETE', `${ws(id)}?containers=delete`),
   approveUser: (id: string) =>
     call<{ emailed: boolean }>('POST', `/v1/admin/users/${encodeURIComponent(id)}/approve`),
   rejectUser: (id: string) => call<void>('POST', `/v1/admin/users/${encodeURIComponent(id)}/reject`),

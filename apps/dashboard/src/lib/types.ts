@@ -38,6 +38,15 @@ export interface User {
   recoveryCodesLeft: number;
 }
 
+export interface AdminWorkspace {
+  id: string;
+  name: string;
+  createdAt: string;
+  memberCount: number;
+  owners: { id: string; name: string; email: string }[];
+  containers: { id: string; name: string; status: ContainerStatus }[];
+}
+
 export interface AdminUser extends User {
   lastLoginAt: string | null;
   workspaces: { id: string; name: string; role: Role }[];
