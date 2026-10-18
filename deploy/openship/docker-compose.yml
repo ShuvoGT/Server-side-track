@@ -101,8 +101,9 @@ services:
       OPENSHIP_PROJECT_ID: proj_LROwX8TSbQIW3JuB
       OPENSHIP_SERVER_ID: 93f943ec-6e99-44e0-8dd8-4625950764ba
       PREVIEW_URL_TEMPLATE: https://{id}.preview.ibos.agency
-      # The office DNS does not know the preview names; tagging servers get them in /etc/hosts.
-      OPENSHIP_HOSTS_IP: 103.197.205.34
+      # OPENSHIP_HOSTS_IP (preview names in each tagging server's /etc/hosts, for the office DNS) is off: the
+      # Cloudflare WAF in front of deploy.ibos.io rejects service updates that carry an /etc/hosts file. GTM
+      # Preview of newer containers needs *.preview.ibos.agency in the office DNS (dns01) instead.
     depends_on:
       redis: { condition: service_healthy }
       api: { condition: service_started }

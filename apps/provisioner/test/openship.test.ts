@@ -217,4 +217,15 @@ describe('OpenshipDriver', () => {
     await driver.apply(spec);
     expect(api.deployments).toHaveLength(2);
   });
+
+  it('still applies when the running-services lookup is refused', async () => {
+    const api = new FakeOpenship();
+    api.runningServiceNames = async () => {
+      throw new Error('Openship answered 403');
+    };
+    const driver = new OpenshipDriver(api, options);
+    await driver.apply(spec);
+    await driver.apply(spec);
+    expect(api.deployments).toHaveLength(1);
+  });
 });
