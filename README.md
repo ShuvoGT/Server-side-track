@@ -373,7 +373,7 @@ reloading fixes it.
 - **The office DNS (dns01, `10.209.99.2`) hosts its own `ibos.agency` and `travilo.io` zones**, so ibos-34 and
   office PCs get "not found" for names that exist only in Cloudflare. Until IT adds them to dns01 (or forwards
   those zones), the Travilo tagging service has a mounted `/etc/hosts` line for `travilo-preview.ibos.agency`
-  (Openship service file). Remove it once dns01 knows the name. Chrome's Secure DNS hides this on office PCs.
+  (Openship service file); removed on 2026-10-18 once dns01 had the name. Chrome's Secure DNS hides this on office PCs.
 - **The server container refused `gtag.js`** for the GA4 tag with a 400 even with the client settings above;
   the gateway's gtag.js fallback covers it (dashboard log: "Loader (gtag.js via Google)").
 - **A second Google tag on the page wins.** Site Kit placed `GT-55JPMHN4` without `server_container_url`, and GA4
@@ -411,5 +411,7 @@ reloading fixes it.
 - **Consequence:** newer containers' GTM Preview works only once the office DNS resolves their preview names.
   Requested from IT: on dns01, zone `ibos.agency`, `*.preview` A `103.197.205.34` and `travilo-preview` A
   `103.197.205.34`; and a WAF skip rule for `103.197.205.34` on `deploy.ibos.io` `/api/proxy/api/*`. Check with
-  `nslookup test.preview.ibos.agency 10.209.99.2`. Once both are in place, Travilo's `/etc/hosts` file can go.
+  `nslookup test.preview.ibos.agency 10.209.99.2`. **Done on 2026-10-18:** dns01 resolves the preview names (checked
+  from ibos-34) and Travilo's `/etc/hosts` file is removed. The WAF rule is still pending: both requests above
+  still get 403 from ibos-34.
 - Live tracking is not affected by either; only new setups and GTM Preview are.
