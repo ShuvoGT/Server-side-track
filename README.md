@@ -112,7 +112,8 @@ Drivers (`DRIVER`):
 The `openship` driver (`OPENSHIP_API_URL`, `OPENSHIP_TOKEN`, `OPENSHIP_ORGANIZATION_ID`, `OPENSHIP_PROJECT_ID`,
 `OPENSHIP_SERVER_ID`, optionally `OPENSHIP_HOSTS_IP` and `OPENSHIP_COMPOSE_PATH`) only touches services named after
 the container. Each one carries a hash of what was last applied (`/opentrack.spec`, since Openship masks environment
-values), so a service is patched and redeployed only when that changes, or when the tagging server does not answer.
+values), so a service is patched and redeployed only when that changes, when Openship reports it not running (e.g.
+after a deployment that partly failed), or when the tagging server does not answer.
 Openship deploys only from a source, so each deployment uploads a tiny folder with a compose file naming those
 services. A tracking domain that already has an Openship domain on another service (e.g. on the gateway) is left
 alone.
@@ -171,9 +172,11 @@ workspaces (other workspaces' containers answer 404). Requests with the admin ke
   one); members and pending invites go with it. Super-admins delete accounts under All users: workspaces shared with
   another owner stay, an empty workspace of their own goes with them, and it is refused while a workspace of theirs
   still has containers or other members without another owner. Super-admins and your own account cannot be deleted.
+  Super-admins also delete any workspace under **All workspaces**, together with its containers: their routes stop
+  at once and the provisioner removes their tagging servers.
 
 Dashboard pages: **Containers**, **New container**, **Members** (invites, roles, account requests, delete
-workspace), **Settings** (profile, preferences, security), and for super-admins **All users**. The sidebar has a
+workspace), **Settings** (profile, preferences, security), and for super-admins **All users** and **All workspaces**. The sidebar has a
 workspace switcher and a light/dark/system theme switch (light by default).
 
 ### Database: PostgreSQL
@@ -240,9 +243,10 @@ Without them the admin key has full access.
 | POST             | `/v1/me/password`                              | Change (or first set) the password; ends other sessions                     |
 | POST             | `/v1/me/two-factor/{setup,enable,disable}`     | Two-step verification                                                       |
 | GET              | `/v1/admin/users`                              | Super-admins: every account with status and workspaces                      |
+| GET              | `/v1/admin/workspaces`                         | Super-admins: every workspace with owners, member count and containers      |
 | POST/DELETE      | `/v1/admin/users/:id[/approve\|/reject]`       | Super-admins: approve, reject or delete an account                          |
 | GET/POST         | `/v1/tenants`                                  | List or create workspaces                                                   |
-| PATCH/DELETE     | `/v1/tenants/:id`                              | Rename; delete an empty workspace (owners)                                  |
+| PATCH/DELETE     | `/v1/tenants/:id`                              | Rename; delete an empty workspace (owners), or with `?containers=delete`    |
 | GET/POST         | `/v1/tenants/:id/members`                      | Members and invites; add or invite by email (owners)                        |
 | PATCH/DELETE     | `/v1/tenants/:id/members/:userId`              | Change role; remove (owners) or leave                                       |
 | DELETE           | `/v1/tenants/:id/invites/:inviteId`            | Cancel an invite                                                            |
@@ -304,7 +308,7 @@ Dashboard (`apps/dashboard`): `API_URL`, `ADMIN_API_KEY`, `SESSION_SECRET` (sign
 | Data plane: power-ups v1                                 | Geo, user agent, bot filtering, cookie keeper, anonymizer done.                                                                                                                                                                                                                                                                                                                                       |
 | Control plane: data model and API                        | Done (`apps/api`): accounts, workspaces with owners and members, invites, approvals, containers, domains; every user request scoped to its workspaces.                                                                                                                                                                                                                                                |
 | Control plane: provisioning                              | Done (`apps/provisioner`): validate, deploy, wait for health, report Active with the upstream URL; roll back a new container that fails; delete. Changing the Container Config in the dashboard re-provisions. On Openship it also sets up each verified tracking domain on the edge. Custom-domain certificate checks are not part of it yet.                                                        |
-| Control plane: dashboard                                 | Done (`apps/dashboard`): sign-in, containers, onboarding, domains with DNS steps, power-ups, usage chart, live request logs, settings; empty, loading and error states. Accounts with email/password and Google, two-step verification, approvals, workspaces with owners and members, account settings (time zone used everywhere), super-admin user list.                                           |
+| Control plane: dashboard                                 | Done (`apps/dashboard`): sign-in, containers, onboarding, domains with DNS steps, power-ups, usage chart, live request logs, settings; empty, loading and error states. Accounts with email/password and Google, two-step verification, approvals, workspaces with owners and members, account settings (time zone used everywhere), super-admin user and workspace lists.                            |
 | Logging, monitoring, metering                            | Prometheus metrics, hourly usage roll-up and 7-day request logs done; Loki and alerts not done.                                                                                                                                                                                                                                                                                                       |
 | Integrations (GTM playbook, WooCommerce plugin, vendors) | Not started. The gateway's webhook endpoint and signing scheme are ready for the plugin.                                                                                                                                                                                                                                                                                                              |
 | Security, privacy, testing, operations, rollout          | Chapters are stubs in the guide. Already in place: namespace NetworkPolicy, timing-safe token checks, verified-only certificates, consent-aware cookie keeper, IP anonymization, scrypt passwords, sign-in limits, TOTP two-step verification with encrypted keys, session revocation on password change, gateway refuses host-like paths (`//host/…`, no SSRF), CI (lint, build, test, image build). |
@@ -326,6 +330,7 @@ service per tracking domain (Openship keeps one custom domain per service port, 
 | `ss.travilo.io`               | `gateway:8080`                   | Tracking domain of travilo.io                                |
 | `travilo-preview.ibos.agency` | `sst-chukjbhcigtx2-preview:8080` | GTM server Preview for travilo.io                            |
 | `ss.aeroapps.io`              | `sst-ca62dr98lr5hh-edge-…:8080`  | Tracking domain of aeroapps.io (container `ca62dr98lr5hh`)   |
+| `ss.ibos.io`                  | `sst-c8fu2t9nupnwu-edge-…:8080`  | Tracking domain of ibos.io (container `c8fu2t9nupnwu`)       |
 | `pgadmin.ibos.agency`         | `pgadmin:80`                     | pgAdmin for the live PostgreSQL (login: Openship variables)  |
 | `<id>.preview.ibos.agency`    | `sst-<id>-preview:8080`          | GTM server Preview of each newer container (wildcard DNS)    |
 | any other tracking domain     | `sst-<id>-edge-<host>:8080`      | nginx proxy to `gateway:8080`, created by the provisioner    |
@@ -382,3 +387,9 @@ reloading fixes it.
   (`DNS_SERVERS`).
 - **Two containers run side by side.** GTM Preview is one session per browser: connecting Tag Assistant to one
   server container ends the other's preview, not its tracking. Use separate browser profiles to debug both.
+- **Check the web container that Google serves.** "Published" in the wrong container (server instead of web) looks
+  the same in the GTM UI; `https://www.googletagmanager.com/gtm.js?id=GTM-…` shows the live version and its tags.
+- **A new website needs the web container id in Power-ups**; without it the custom loader path answers 400.
+- **Openship deployments can partly fail** (`partial_failure`). The provisioner deploys again whatever Openship does
+  not report running; for one Openship has not verified yet, its domain's Verify (or the next automatic retry)
+  issues the certificate.
