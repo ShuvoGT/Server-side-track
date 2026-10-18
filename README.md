@@ -113,7 +113,8 @@ The `openship` driver (`OPENSHIP_API_URL`, `OPENSHIP_TOKEN`, `OPENSHIP_ORGANIZAT
 `OPENSHIP_SERVER_ID`, optionally `OPENSHIP_HOSTS_IP` and `OPENSHIP_COMPOSE_PATH`) only touches services named after
 the container. Each one carries a hash of what was last applied (`/opentrack.spec`, since Openship masks environment
 values), so a service is patched and redeployed only when that changes, when Openship reports it not running (e.g.
-after a deployment that partly failed), or when the tagging server does not answer.
+after a deployment that partly failed; skipped when that lookup is refused), or when the tagging server does not
+answer.
 Openship deploys only from a source, so each deployment uploads a tiny folder with a compose file naming those
 services. A tracking domain that already has an Openship domain on another service (e.g. on the gateway) is left
 alone.
@@ -331,6 +332,7 @@ service per tracking domain (Openship keeps one custom domain per service port, 
 | `travilo-preview.ibos.agency` | `sst-chukjbhcigtx2-preview:8080` | GTM server Preview for travilo.io                            |
 | `ss.aeroapps.io`              | `sst-ca62dr98lr5hh-edge-…:8080`  | Tracking domain of aeroapps.io (container `ca62dr98lr5hh`)   |
 | `ss.ibos.io`                  | `sst-c8fu2t9nupnwu-edge-…:8080`  | Tracking domain of ibos.io (container `c8fu2t9nupnwu`)       |
+| `ss.aerodrop.ai`              | `sst-cyd1f5gig4ztw-edge-…:8080`  | Tracking domain of aerodrop.ai (container `cyd1f5gig4ztw`)   |
 | `pgadmin.ibos.agency`         | `pgadmin:80`                     | pgAdmin for the live PostgreSQL (login: Openship variables)  |
 | `<id>.preview.ibos.agency`    | `sst-<id>-preview:8080`          | GTM server Preview of each newer container (wildcard DNS)    |
 | any other tracking domain     | `sst-<id>-edge-<host>:8080`      | nginx proxy to `gateway:8080`, created by the provisioner    |
@@ -342,7 +344,13 @@ services the provisioner creates are not in the compose file, so a platform depl
 changes: open a folder session, upload, scan, then `deployments/build/access` with `serviceIds`, without
 `projects/ensure`. Deploys are folder uploads with the compose file at the archive root (build contexts
 rewritten from `../..` to `.`); redeploy only the services that changed (usually `api` and `dashboard`), never
-`redis` or `postgres`. A dashboard tab opened before a deploy shows "The dashboard was updated" on its next action;
+`redis` or `postgres`.
+
+`deploy.ibos.io` (Openship's control panel and API) is only on the setup path: creating, changing or deleting a
+container or tracking domain, and deploys. Tracking traffic and the dashboard go straight to ibos-34, so they keep
+working when `deploy.ibos.io` is down or refuses the provisioner; only new setups wait.
+
+A dashboard tab opened before a deploy shows "The dashboard was updated" on its next action;
 reloading fixes it.
 
 ### Adding a website
@@ -393,3 +401,15 @@ reloading fixes it.
 - **Openship deployments can partly fail** (`partial_failure`). The provisioner deploys again whatever Openship does
   not report running; for one Openship has not verified yet, its domain's Verify (or the next automatic retry)
   issues the certificate.
+
+### Cloudflare WAF and the office DNS (aerodrop.ai, 2026-10-18)
+
+- **A Cloudflare WAF sits in front of `deploy.ibos.io` on ibos-34's route** (office PCs reach it directly, so a
+  request that works there can still fail from the server). It answered `403 Attention Required! | Cloudflare` to
+  service settings carrying an `/etc/hosts` file and to `GET …/services/containers`. The live provisioner
+  therefore runs without `OPENSHIP_HOSTS_IP`, and treats the running-services lookup as optional.
+- **Consequence:** newer containers' GTM Preview works only once the office DNS resolves their preview names.
+  Requested from IT: on dns01, zone `ibos.agency`, `*.preview` A `103.197.205.34` and `travilo-preview` A
+  `103.197.205.34`; and a WAF skip rule for `103.197.205.34` on `deploy.ibos.io` `/api/proxy/api/*`. Check with
+  `nslookup test.preview.ibos.agency 10.209.99.2`. Once both are in place, Travilo's `/etc/hosts` file can go.
+- Live tracking is not affected by either; only new setups and GTM Preview are.
