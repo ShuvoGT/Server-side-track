@@ -48,6 +48,21 @@ export interface GatewayOptions {
 const UNCACHEABLE_SCRIPT_PARAMS = ['gtm_auth', 'gtm_preview', 'gtm_debug'];
 const GOOGLE_SCRIPT_TIMEOUT_MS = 10_000;
 
+/** A path that a URL parser reads as another host ("//evil.example/x", "/\evil.example/x"). */
+const HOST_LIKE_PATH = /^\/[/\\]/;
+
+/**
+ * The upstream address for a request path. Throws if the result would leave the upstream's origin, so a crafted
+ * path can never make the gateway call another server.
+ */
+export function upstreamUrlFor(pathAndQuery: string, base: string): URL {
+  const origin = new URL(base).origin;
+  const url = new URL(pathAndQuery, base);
+  if (HOST_LIKE_PATH.test(pathAndQuery) || url.origin !== origin)
+    throw new Error('path leaves the upstream origin');
+  return url;
+}
+
 /** gtag.js requests, whether through the custom loader's gtag path or Google's standard /gtag/js path. */
 const isGtagScript = (pathAndQuery: string) => pathAndQuery.startsWith('/gtag/js');
 
@@ -130,6 +145,11 @@ export function buildGateway(options: GatewayOptions, deps: GatewayDeps): Fastif
 
   // Every body is forwarded as bytes; the webhook signature is checked against the same bytes.
   app.removeAllContentTypeParsers();
+
+  // Bots probe paths such as //blog/wp-includes/…; parsed as a URL, that is the host "blog".
+  app.addHook('onRequest', async (req, reply) => {
+    if (HOST_LIKE_PATH.test(req.url)) return reply.code(400).send({ error: 'invalid_path' });
+  });
   app.addContentTypeParser('*', { parseAs: 'buffer' }, (_req, body, done) => done(null, body));
 
   const routeBotLists = new WeakMap<string[], BlockList>();
@@ -197,7 +217,7 @@ export function buildGateway(options: GatewayOptions, deps: GatewayDeps): Fastif
   ): Promise<UpstreamResult> {
     const end = deps.metrics.upstreamSeconds.startTimer({ kind });
     try {
-      const response = await undiciRequest(new URL(pathAndQuery, route.upstreamUrl), {
+      const response = await undiciRequest(upstreamUrlFor(pathAndQuery, route.upstreamUrl), {
         method: method as Dispatcher.HttpMethod,
         headers,
         body: body && body.length > 0 && method !== 'GET' && method !== 'HEAD' ? body : undefined,
@@ -228,7 +248,7 @@ export function buildGateway(options: GatewayOptions, deps: GatewayDeps): Fastif
     const end = deps.metrics.upstreamSeconds.startTimer({ kind: 'google_script' });
     try {
       const response = await undiciRequest(
-        new URL(pathAndQuery, options.googleScriptOrigin ?? 'https://www.googletagmanager.com'),
+        upstreamUrlFor(pathAndQuery, options.googleScriptOrigin ?? 'https://www.googletagmanager.com'),
         {
           method: 'GET',
           headers: {

@@ -1,4 +1,4 @@
-import { createServer, type IncomingMessage, type Server } from 'node:http';
+import { createServer, request as httpRequest, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -8,7 +8,7 @@ import {
   type ContainerRoute,
   type PowerUpsInput,
 } from '@sst/shared';
-import { buildGateway } from '../src/app.js';
+import { buildGateway, upstreamUrlFor } from '../src/app.js';
 import { UsageCounters } from '../src/counters.js';
 import { LoaderCache } from '../src/loaderCache.js';
 import { createMetrics } from '../src/metrics.js';
@@ -154,6 +154,35 @@ describe('routing', () => {
       (await app.inject({ url: '/g/collect', headers: { ...visitor, host: 'bad_host' } })).statusCode,
     ).toBe(400);
     expect(seen).toHaveLength(0);
+  });
+
+  it('refuses paths a URL parser would read as another host', async () => {
+    const { app } = setup(makeRoute());
+    // A real socket: the test injector would parse these paths into a host itself.
+    await app.listen({ host: '127.0.0.1', port: 0 });
+    const { port } = app.server.address() as AddressInfo;
+    try {
+      for (const path of ['//blog/wp-includes/wlwmanifest.xml', '/\\evil.example/x', '//127.0.0.1:6379/']) {
+        const res = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+          const req = httpRequest({ host: '127.0.0.1', port, path, headers: visitor }, (r) => {
+            let body = '';
+            r.on('data', (c) => (body += c));
+            r.on('end', () => resolve({ status: r.statusCode ?? 0, body }));
+          });
+          req.on('error', reject);
+          req.end();
+        });
+        expect(res.status).toBe(400);
+        expect(JSON.parse(res.body)).toEqual({ error: 'invalid_path' });
+      }
+    } finally {
+      await app.close();
+    }
+    expect(seen).toHaveLength(0);
+    expect(() => upstreamUrlFor('//other.example/x', 'http://tagging:8080')).toThrow();
+    expect(upstreamUrlFor('/g/collect?v=2', 'http://tagging:8080').href).toBe(
+      'http://tagging:8080/g/collect?v=2',
+    );
   });
 
   it('returns 502 when the tagging server is unreachable', async () => {
