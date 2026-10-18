@@ -46,6 +46,14 @@ class FakeOpenship implements OpenshipApi {
   async listDomains() {
     return this.domains;
   }
+  /** Deployed services run; set stopped to simulate a deployment that did not start one. */
+  stopped = new Set<string>();
+  async runningServiceNames() {
+    const deployed = new Set(this.deployments.flat());
+    return new Set(
+      this.services.filter((s) => deployed.has(s.id) && !this.stopped.has(s.name)).map((s) => s.name),
+    );
+  }
   async deploy(serviceIds: string[]) {
     this.deployments.push(serviceIds);
     return `dep_${this.deployments.length}`;
@@ -194,6 +202,18 @@ describe('OpenshipDriver', () => {
     expect(api.deployments).toHaveLength(2);
     expect(api.deployments[1]).toEqual(api.deployments[0]);
     healthy = true;
+    await driver.apply(spec);
+    expect(api.deployments).toHaveLength(2);
+  });
+
+  it('deploys a service again that is not running, e.g. after a failed deployment', async () => {
+    const api = new FakeOpenship();
+    const driver = new OpenshipDriver(api, options);
+    await driver.apply(spec);
+    api.stopped.add('sst-cnew-edge-ss-shop-com');
+    await driver.apply(spec);
+    expect(api.deployments[1]).toEqual([named(api, 'sst-cnew-edge-ss-shop-com').id]);
+    api.stopped.clear();
     await driver.apply(spec);
     expect(api.deployments).toHaveLength(2);
   });

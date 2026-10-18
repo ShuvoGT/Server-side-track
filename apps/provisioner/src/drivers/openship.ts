@@ -187,8 +187,13 @@ export class OpenshipDriver implements Driver {
     }
 
     const upstreamUrl = this.options.upstreamTemplate.replaceAll('{id}', spec.id);
-    // A deployment that failed after the settings were saved leaves nothing changed but nothing running either
-    // (e.g. a retry, or "Restart tagging servers"): then deploy everything again.
+    // A deployment that failed after the settings were saved leaves nothing changed but something not running
+    // (e.g. a retry, or "Restart tagging servers"): deploy every service that is not running, and everything if
+    // the tagging server does not answer.
+    const running = await this.api.runningServiceNames();
+    const byId = new Map([...services, preview.service, tagging.service].map((s) => [s.id, s.name]));
+    for (const id of managed)
+      if (!toDeploy.includes(id) && !running.has(byId.get(id) ?? '')) toDeploy.push(id);
     if (toDeploy.length === 0 && !(await (this.options.isHealthy ?? answersHealthy)(upstreamUrl)))
       toDeploy.push(...managed);
     if (toDeploy.length > 0) await this.deploy(toDeploy, spec.id);

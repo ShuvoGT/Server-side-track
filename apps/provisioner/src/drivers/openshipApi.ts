@@ -41,6 +41,8 @@ export interface OpenshipApi {
   listDomains(): Promise<OpenshipDomain[]>;
   /** Starts a deployment of these services only; every other service keeps running untouched. */
   deploy(serviceIds: string[]): Promise<string>;
+  /** Names of the project's services that have a running container. */
+  runningServiceNames(): Promise<Set<string>>;
   /** ready, failed, building, ... as Openship reports it. */
   deploymentStatus(deploymentId: string): Promise<{ status: string; message?: string }>;
 }
@@ -109,6 +111,16 @@ export class OpenshipHttpApi implements OpenshipApi {
 
   async deleteService(id: string) {
     await this.call('DELETE', `${this.project}/services/${encodeURIComponent(id)}`);
+  }
+
+  async runningServiceNames() {
+    const body = await this.call<{ data?: { serviceName?: string; status?: string }[] }>(
+      'GET',
+      `${this.project}/services/containers`,
+    );
+    return new Set(
+      (body.data ?? []).filter((c) => c.status === 'running' && c.serviceName).map((c) => c.serviceName!),
+    );
   }
 
   async listDomains() {
