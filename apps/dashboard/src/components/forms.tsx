@@ -455,7 +455,7 @@ export function AddDomainForm({ containerId }: { containerId: string }) {
       <div className="row" style={{ alignItems: 'flex-end' }}>
         <div className="field" style={{ flex: '1 1 260px' }}>
           <label htmlFor="hostname">Tracking domain</label>
-          <input id="hostname" name="hostname" className="input" placeholder="sst.example.com" required />
+          <input id="hostname" name="hostname" className="input" placeholder="ss.example.com" required />
         </div>
         <SubmitButton pending="Adding…">Add domain</SubmitButton>
       </div>

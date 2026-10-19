@@ -17,7 +17,7 @@ export default async function DomainsPage({ params }: { params: Promise<{ id: st
           <div>
             <h2>Tracking domains</h2>
             <p>
-              A subdomain of the website, e.g. <span className="mono">sst.example.com</span>. Several websites
+              A subdomain of the website, e.g. <span className="mono">ss.example.com</span>. Several websites
               can share one container.
             </p>
           </div>

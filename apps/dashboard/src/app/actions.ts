@@ -402,7 +402,7 @@ export async function addDomain(
 ): Promise<ActionState> {
   return guarded(async () => {
     const hostname = text(form, 'hostname');
-    if (!hostname) return { error: 'Enter the tracking domain, e.g. sst.example.com.' };
+    if (!hostname) return { error: 'Enter the tracking domain, e.g. ss.example.com.' };
     const domain = await api.addDomain(containerId, hostname);
     revalidatePath(`/containers/${containerId}`, 'layout');
     return { ok: true, message: `${domain.hostname} added. Create the DNS record below, then verify.` };

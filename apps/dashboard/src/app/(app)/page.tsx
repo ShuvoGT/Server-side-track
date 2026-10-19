@@ -61,7 +61,7 @@ export default async function ContainersPage() {
             }
           >
             Paste the Container Config of a GTM server container, add a tracking domain such as
-            sst.example.com, and the platform runs the tagging server for it.
+            ss.example.com, and the platform runs the tagging server for it.
           </EmptyState>
         </div>
       ) : (

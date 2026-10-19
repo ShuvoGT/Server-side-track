@@ -36,7 +36,7 @@ const MESSAGES: Record<string, string> = {
   invalid_container_config:
     'That Container Config was not accepted. Copy it again from GTM: Admin > Container settings > Manually provision tagging server.',
   hostname_taken: 'Another container already uses this domain.',
-  invalid_hostname: 'Enter a domain name such as sst.example.com.',
+  invalid_hostname: 'Enter a domain name such as ss.example.com.',
   no_verified_domain: 'Verify a tracking domain first.',
   not_found: 'Not found.',
   unauthorized: 'The dashboard is not authorized to call the API. Check ADMIN_API_KEY.',

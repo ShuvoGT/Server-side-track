@@ -33,7 +33,7 @@ export default async function NewContainerPage() {
           <div>
             <h3>Add a tracking domain</h3>
             <p>
-              A subdomain of the website, such as sst.example.com, pointed at the platform with a CNAME
+              A subdomain of the website, such as ss.example.com, pointed at the platform with a CNAME
               record.
             </p>
           </div>

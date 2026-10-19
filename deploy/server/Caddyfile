@@ -24,7 +24,7 @@ http:// {
 	redir https://{host}{uri} 308
 }
 
-# Customer tracking domains (sst.example.com), each with an on-demand certificate.
+# Customer tracking domains (ss.example.com), each with an on-demand certificate.
 https:// {
 	tls {
 		on_demand
