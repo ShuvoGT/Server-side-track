@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { ThemeToggle } from '@/components/theme';
+import { LandingMenu } from './menu';
 import './welcome.css';
 
 export const metadata = {
@@ -87,13 +88,16 @@ export default function WelcomePage() {
             <a href="#faq">FAQ</a>
           </nav>
           <div className="lp-nav-actions">
-            <ThemeToggle />
-            <Link href="/login" className="btn btn-ghost">
+            <span className="lp-wide-only">
+              <ThemeToggle />
+            </span>
+            <Link href="/login" className="btn btn-ghost lp-wide-only">
               Sign in
             </Link>
             <Link href="/signup" className="btn btn-primary">
               Get started
             </Link>
+            <LandingMenu />
           </div>
         </div>
       </header>
