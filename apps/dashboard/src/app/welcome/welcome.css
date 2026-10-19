@@ -180,37 +180,6 @@
   border-right: 0;
 }
 
-/* Product screenshot */
-.lp-shot {
-  width: 100%;
-  max-width: 1040px;
-  margin: 48px 0 0;
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  overflow: hidden;
-  background: #0b0d13;
-  box-shadow:
-    var(--shadow-lg),
-    0 30px 80px -30px color-mix(in srgb, var(--accent) 45%, transparent);
-}
-.lp-shot-bar {
-  display: flex;
-  gap: 6px;
-  padding: 10px 14px;
-  background: #151925;
-}
-.lp-shot-bar span {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: #343a4c;
-}
-.lp-shot img {
-  display: block;
-  width: 100%;
-  height: auto;
-}
-
 /* Sections */
 .lp-section {
   padding: 88px 0;

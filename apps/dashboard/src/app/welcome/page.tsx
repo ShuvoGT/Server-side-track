@@ -144,16 +144,6 @@ export default function WelcomePage() {
                 <span>your tags send on</span>
               </div>
             </div>
-
-            <figure className="lp-shot">
-              <div className="lp-shot-bar" aria-hidden="true">
-                <span />
-                <span />
-                <span />
-              </div>
-              {/* Static product screenshot. */}
-              <img src="/manual/logs.png" alt="OpenTrack live event logs" />
-            </figure>
           </div>
         </section>
 
