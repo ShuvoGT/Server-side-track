@@ -68,6 +68,12 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
             )}
             Settings
           </NavLink>
+          <NavLink href="/help">
+            {navIcon(
+              'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20Zm-2.5-13a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14m0 3v.01',
+            )}
+            User manual
+          </NavLink>
           {user.superAdmin && (
             <NavLink href="/admin/users">
               {navIcon(

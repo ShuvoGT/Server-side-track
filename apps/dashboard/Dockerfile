@@ -22,6 +22,8 @@ ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=3100 HOSTNAME=0.0.0.0
 WORKDIR /app
 COPY --from=build --chown=node:node /repo/apps/dashboard/.next/standalone ./
 COPY --from=build --chown=node:node /repo/apps/dashboard/.next/static ./apps/dashboard/.next/static
+# Standalone output leaves out public/ (manual screenshots); Next serves it from next to server.js.
+COPY --from=build --chown=node:node /repo/apps/dashboard/public ./apps/dashboard/public
 USER node
 EXPOSE 3100
 ENTRYPOINT ["/sbin/tini", "--"]

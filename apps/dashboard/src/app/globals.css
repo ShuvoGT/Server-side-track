@@ -1702,3 +1702,95 @@ pre {
   grid-template-columns: 120px minmax(0, 1fr);
   gap: 10px;
 }
+
+/* User manual (/help) */
+.manual {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  max-width: 960px;
+  margin: 0 auto;
+}
+.manual .page-head {
+  margin-bottom: 0;
+}
+.manual-toc {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  padding: 14px 20px;
+  font-size: 13px;
+}
+.manual-section {
+  scroll-margin-top: 16px;
+}
+.manual-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  line-height: 1.6;
+}
+.manual-body h3 {
+  font-size: 14px;
+  margin-top: 6px;
+}
+.manual-body ol,
+.manual-body ul {
+  padding-left: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.manual-body code {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  background: var(--accent-soft);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+.manual-shot {
+  margin: 4px 0;
+}
+.manual-shot img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.manual-shot figcaption {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.manual-flow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.manual-flow > div {
+  flex: 1 1 150px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  text-align: center;
+}
+.manual-flow > div.accent {
+  border: 2px solid var(--accent);
+  background: var(--accent-soft);
+}
+.manual-flow span {
+  font-size: 12px;
+  color: var(--text-2);
+}
+.manual-flow > i {
+  font-style: normal;
+  color: var(--text-2);
+}
+.manual-checklist {
+  list-style: '☐  ';
+}
