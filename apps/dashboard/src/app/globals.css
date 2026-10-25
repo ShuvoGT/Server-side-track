@@ -1794,3 +1794,131 @@ pre {
 .manual-checklist {
   list-style: '☐  ';
 }
+
+/* DNS setup guide dialog (Domains) */
+.dns-guide {
+  width: min(640px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-lg);
+}
+.dns-guide::backdrop {
+  background: rgb(10 12 20 / 0.55);
+  backdrop-filter: blur(2px);
+}
+.dns-guide-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 22px 24px;
+}
+.dns-guide-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+.dns-guide-head h2 {
+  font-size: 18px;
+  word-break: break-word;
+}
+.dns-guide-head p {
+  margin-top: 4px;
+}
+.dns-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+.dns-tabs button {
+  flex: 1 1 auto;
+  padding: 7px 12px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.dns-tabs button.active {
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: var(--shadow);
+}
+.dns-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-left: 20px;
+  line-height: 1.55;
+}
+.dns-steps .table-wrap {
+  margin-top: 8px;
+}
+.dns-steps th {
+  width: 34%;
+  font-weight: 500;
+  color: var(--text-2);
+}
+.dns-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.dns-value code,
+.dns-steps code,
+.dns-guide-notes code {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--accent-soft);
+}
+.dns-guide-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--warning-soft);
+}
+.dns-guide-foot {
+  display: flex;
+  justify-content: flex-end;
+}
+@media (max-width: 560px) {
+  .dns-guide-inner {
+    padding: 18px 16px;
+  }
+  .dns-steps {
+    padding-left: 18px;
+  }
+  .dns-steps table,
+  .dns-steps tbody,
+  .dns-steps tr,
+  .dns-steps th,
+  .dns-steps td {
+    display: block;
+    width: 100%;
+  }
+  .dns-steps th {
+    padding-bottom: 2px;
+    border-bottom: 0;
+  }
+  .dns-steps td {
+    padding-top: 0;
+  }
+  .dns-value code {
+    word-break: break-all;
+  }
+}

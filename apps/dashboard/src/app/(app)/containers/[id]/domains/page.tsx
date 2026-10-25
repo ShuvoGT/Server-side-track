@@ -1,3 +1,4 @@
+import { DnsGuide } from '@/components/dnsGuide';
 import { AddDomainForm, DomainActions } from '@/components/forms';
 import { Alert, DomainStatusBadge, EmptyState, formatDateTime, Icon } from '@/components/ui';
 import { api } from '@/lib/api';
@@ -53,7 +54,14 @@ export default async function DomainsPage({ params }: { params: Promise<{ id: st
             <div className="card-body stack">
               {domain.status !== 'verified' && (
                 <>
-                  <p className="text-2">Create this record at your DNS provider, then press Verify:</p>
+                  <div className="row" style={{ justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                    <p className="text-2">Create this record at your DNS provider, then press Verify:</p>
+                    <DnsGuide
+                      domainId={domain.id}
+                      hostname={domain.hostname}
+                      target={platform.edgeHostname}
+                    />
+                  </div>
                   <div className="table-wrap card" style={{ boxShadow: 'none' }}>
                     <table className="table table-compact">
                       <thead>
