@@ -58,16 +58,22 @@ export function DnsGuide({
   domainId,
   hostname,
   target,
+  autoOpen = true,
+  label = 'How to add this record',
 }: {
   domainId: string;
   hostname: string;
   target: string;
+  /** Open by itself the first time it is shown in this browser. */
+  autoOpen?: boolean;
+  label?: string;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [provider, setProvider] = useState<Provider>('cloudflare');
   const { zone, name } = splitHostname(hostname);
 
   useEffect(() => {
+    if (!autoOpen) return;
     const key = `opentrack.dnsGuide.${domainId}`;
     try {
       if (localStorage.getItem(key)) return;
@@ -76,7 +82,7 @@ export function DnsGuide({
       return; // Storage blocked: never open by itself.
     }
     dialog.current?.showModal();
-  }, [domainId]);
+  }, [autoOpen, domainId]);
 
   const nameValue = <Value text={name} />;
   const targetValue = <Value text={target} />;
@@ -84,7 +90,7 @@ export function DnsGuide({
   return (
     <>
       <button type="button" className="btn btn-sm" onClick={() => dialog.current?.showModal()}>
-        How to add this record
+        {label}
       </button>
       <dialog
         ref={dialog}

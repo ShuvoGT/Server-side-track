@@ -30,7 +30,19 @@ export default async function DomainsPage({ params }: { params: Promise<{ id: st
 
       {container.domains.length === 0 ? (
         <div className="card">
-          <EmptyState icon={Icon.globe} title="No domains yet">
+          <EmptyState
+            icon={Icon.globe}
+            title="No domains yet"
+            action={
+              <DnsGuide
+                domainId="example"
+                hostname="ss.yoursite.com"
+                target={platform.edgeHostname}
+                autoOpen={false}
+                label="How DNS setup works"
+              />
+            }
+          >
             Add the subdomain that will receive tracking requests. Using the website&apos;s own domain makes
             the platform&apos;s cookies first-party.
           </EmptyState>
