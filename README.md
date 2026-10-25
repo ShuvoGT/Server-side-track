@@ -190,7 +190,8 @@ session cookie; signed-in users get the dashboard at `/` as before. The manual's
 On a container's **Domains** page, a pending domain has **How to add this record**: a dialog
 (`components/dnsGuide.tsx`) with step-by-step instructions for Cloudflare (DNS only, grey cloud), GoDaddy, Namecheap
 and other panels, filled in with the domain's zone, record name and target, each with a copy button. It opens by
-itself the first time a pending domain is shown in a browser.
+itself the first time a pending domain is shown in a browser. A container with no domains shows **How DNS setup
+works** instead, which opens the same guide for `ss.yoursite.com` and never opens by itself.
 
 ### Database: PostgreSQL
 
