@@ -428,3 +428,16 @@ reloading fixes it.
   from ibos-34) and Travilo's `/etc/hosts` file is removed. The WAF rule is still pending: both requests above
   still get 403 from ibos-34.
 - Live tracking is not affected by either; only new setups and GTM Preview are.
+
+### Office DNS outages and test IPs (2026-11-05)
+
+- **dns01 stops answering for a few minutes at a time.** Every tagging server logged `queryA ETIMEOUT` /
+  `queryAaaa ETIMEOUT` at the same moments (e.g. 2026-11-02 12:29–12:31 and 2026-11-03 05:39–05:45 UTC), and tags
+  firing then fail, e.g. Meta CAPI with `sendHttpRequest: queryAaaa ETIMEOUT graph.facebook.com`. Between outages
+  lookups answer in 1–60 ms, and ibos-34 reaches Facebook and Google over IPv4 (it has no IPv6 route). The servers
+  stay on dns01 by choice; IT was asked to investigate the outages and to always answer AAAA queries. Check with
+  each tagging service's logs (`ETIMEOUT`).
+- **Tests from the office show a private visitor IP** (`10.209.99.254` as `X-Forwarded-For`, GA4 `ip_override` and
+  CAPI `client_ip_address`): office traffic reaches ibos-34 inside the network, so the edge sees the office router.
+  Visitors on the internet arrive with their public IP. Check IP handling from mobile data, never by hard-coding an
+  IP in the server container.
