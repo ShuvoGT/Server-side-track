@@ -435,6 +435,12 @@ export function buildGateway(options: GatewayOptions, deps: GatewayDeps): Fastif
     return send(reply, result, keeper.finalize(result.setCookies));
   }
 
+  /**
+   * The visitor address the gateway forwards to the tagging server, shown to the visitor themselves (like a
+   * "what is my IP" page), to check that proxies in front keep the real public address.
+   */
+  app.get('/_ot/ip', async (req, reply) => reply.header('cache-control', 'no-store').send({ ip: req.ip }));
+
   app.route({
     method: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     url: '/*',

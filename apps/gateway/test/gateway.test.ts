@@ -156,6 +156,19 @@ describe('routing', () => {
     expect(seen).toHaveLength(0);
   });
 
+  it('shows a visitor the address it forwards for them', async () => {
+    const { app } = setup(makeRoute());
+    const res = await app.inject({
+      url: '/_ot/ip',
+      headers: { ...visitor, 'x-forwarded-for': '198.51.100.7' },
+      remoteAddress: '10.0.0.2',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ip: '198.51.100.7' });
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(seen).toHaveLength(0);
+  });
+
   it('refuses paths a URL parser would read as another host', async () => {
     const { app } = setup(makeRoute());
     // A real socket: the test injector would parse these paths into a host itself.
