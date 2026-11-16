@@ -46,6 +46,22 @@
         "dev"
       ],
       "port": 3100
+    },
+    {
+      "name": "dashboard-3102",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "pnpm@9.15.9",
+        "--dir",
+        "apps/dashboard",
+        "exec",
+        "next",
+        "dev",
+        "--port",
+        "3102"
+      ],
+      "port": 3102,
+      "autoPort": false
     }
   ]
 }
