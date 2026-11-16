@@ -288,7 +288,9 @@ Internal port (3001), cluster only:
 | POST   | `/internal/containers/:id/status` | Provisioner: `{ "status", "message", "upstreamUrl" }`; refused (409) while deleting |
 | DELETE | `/internal/containers/:id`        | Provisioner: after the namespace is gone                                            |
 
-The gateway serves `/healthz`, `/readyz` and `/metrics` on its admin port (9090), never on the visitor port.
+The gateway serves `/healthz`, `/readyz` and `/metrics` on its admin port (9090), never on the visitor port. On the visitor port,
+`GET /_ot/ip` on any tracking domain returns `{"ip": …}`: the address the gateway forwards for the caller, to check that
+proxies in front keep the visitor's public IP.
 
 ### Configuration
 
@@ -329,7 +331,8 @@ Dashboard (`apps/dashboard`): `API_URL`, `ADMIN_API_KEY`, `SESSION_SECRET` (sign
 
 ## Live deployment: Openship
 
-OpenTrack runs on Openship (`deploy.ibos.io`), server **ibos-34** (`103.197.205.34`), project
+OpenTrack runs on Openship (`deploy.ibos.io`), server **ibos-34** (public address `192.144.80.177` since 2026-11-16;
+before that `103.197.205.34`), project
 `server-side-tracking`, from `deploy/openship/docker-compose.yml`, with the dashboard at https://sst.ibos.agency.
 Email goes through Google Workspace SMTP (an App Password); Google sign-in uses an OAuth client whose redirect URI
 is `https://sst.ibos.agency/api/auth/google/callback`. ibos-34 is shared with other teams' apps, so
@@ -441,3 +444,21 @@ reloading fixes it.
   CAPI `client_ip_address`): office traffic reaches ibos-34 inside the network, so the edge sees the office router.
   Visitors on the internet arrive with their public IP. Check IP handling from mobile data, never by hard-coding an
   IP in the server container.
+
+### Outage and new server address (2026-11-16)
+
+- **What happened:** 23 of 24 services were found stopped and the public address of `sst.ibos.agency` (and so of
+  every tracking domain) changed from `103.197.205.34` to `192.144.80.177`. Openship itself was unstable for a while
+  (SSH resets to ibos-34, a controller restart, 502s). A redeploy of all 24 services brought everything back; hits
+  sent while the tagging servers were down got 502 and are lost (the gateway keeps no hit payloads to replay).
+- **Restarting everything:** redeploy all services in one `deployments/build/access` call (postgres, redis, api,
+  gateway, dashboard, provisioner, then every `sst-…` service); volumes keep the data. Leave untracked folders
+  such as `brag-output*` out of the upload, or Openship refuses it with 413.
+- **Reaching Openship from another network:** if `deploy.ibos.io` resolves to an address that does not answer
+  (e.g. an old internal one), use its public Cloudflare address with `curl --resolve`. Through Cloudflare the WAF
+  blocks `GET …/services/containers` and `GET /deployments/:id`; `GET …/services`, the upload, scan, build/access
+  and `…/exec` work.
+- **Visitor IPs are right on the new address:** `https://ss.travilo.io/_ot/ip` (any tracking domain) shows the
+  caller's own public IP, so the source-NAT problem seen with office tests does not affect visitors there.
+- **To update:** the `EDGE_IPV4` project variable (the A-record fallback shown on the Domains page) still says
+  `103.197.205.34`; IT should confirm the new address is permanent and that services start after a reboot.
